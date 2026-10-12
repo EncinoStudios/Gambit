@@ -34,6 +34,10 @@ endfunction()
 
 gambit_header_only_library(gb_glm glm::glm glm "." glm/glm.hpp)
 gambit_header_only_library(gb_doctest doctest::doctest doctest "." doctest/doctest.h)
+# doctest forward-declares std::ostream instead of including <ostream> unless it recognises libc++, so under MSVC a
+# CHECK that stringifies a std::string_view (ToString(...) == "x") fails with C2027 in every test file that does not
+# happen to include <sstream>/<fstream>. Always include the standard headers, as libc++ already gets automatically.
+target_compile_definitions(gb_doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 gambit_header_only_library(gb_nlohmann_json nlohmann_json::nlohmann_json nlohmann_json include include/nlohmann/json.hpp)
 gambit_header_only_library(gb_entt EnTT::EnTT entt src src/entt/entt.hpp)
 gambit_header_only_library(gb_stb stb::stb stb "." stb_image.h)

@@ -8,6 +8,7 @@
 
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <initializer_list>
 #include <set>
 
@@ -681,11 +682,14 @@ namespace Gambit
 		OrderedJson JsonNumber(float value)
 		{
 			std::array<char, 32> text{};
-			const auto [end, error] = std::to_chars(text.data(), text.data() + text.size(), value);
+			const std::to_chars_result written = std::to_chars(text.data(), text.data() + text.size(), value);
 			double parsed = static_cast<double>(value);
-			if (error == std::errc{})
+			if (written.ec == std::errc{})
 			{
-				std::from_chars(text.data(), end, parsed);
+				// std::strtod, not the floating-point std::from_chars: libc++ only has that since LLVM 20 and the
+				// Xcode 15.4 library deletes the overload. `text` was zero-initialized and the shortest text of a float
+				// is at most 15 characters, so it is NUL-terminated.
+				parsed = std::strtod(text.data(), nullptr);
 			}
 			return parsed;
 		}

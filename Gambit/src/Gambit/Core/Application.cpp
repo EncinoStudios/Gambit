@@ -71,6 +71,10 @@ namespace Gambit
 		{
 			specification.Headless = true;
 		}
+		if (args.HasFlag("--no-gpu"))
+		{
+			specification.EnableGraphics = false;
+		}
 		const bool wantsFrames = args.HasFlag("--frames")
 			|| std::ranges::any_of(args.Args, [](const std::string& arg) { return arg.starts_with("--frames="); });
 		if (wantsFrames)
@@ -131,6 +135,7 @@ namespace Gambit
 		}
 		m_InputSource.reset();
 		m_Devices.reset();
+		m_GraphicsDevice.reset(); // its swap chain belongs to the window
 		m_Window.reset();
 		s_Instance = nullptr;
 	}
@@ -145,6 +150,12 @@ namespace Gambit
 	{
 		GB_CORE_ASSERT(m_Window != nullptr, "the application has no window (headless, or not initialized)");
 		return *m_Window;
+	}
+
+	GraphicsDevice& Application::GetGraphicsDevice()
+	{
+		GB_CORE_ASSERT(m_GraphicsDevice != nullptr, "the application has no graphics device (EnableGraphics is off)");
+		return *m_GraphicsDevice;
 	}
 
 	Result<void> Application::Initialize()
@@ -179,6 +190,29 @@ namespace Gambit
 			m_Window = std::move(*window);
 			m_Window->SetEventCallback([this](Event& event) { OnEvent(event); });
 			m_Devices = CreateScope<InputDevices>(*m_Window);
+		}
+
+		if (m_Specification.EnableGraphics)
+		{
+			GraphicsDeviceSpecification graphics = m_Specification.Graphics;
+			graphics.ApplicationName = m_Specification.Name;
+			graphics.Headless = m_Specification.Headless;
+			if (m_Window != nullptr)
+			{
+				graphics.VSync = m_Window->IsVSync();
+			}
+			Result<Scope<GraphicsDevice>> device = GraphicsDevice::Create(graphics, m_Window.get());
+			if (!device)
+			{
+				m_Devices.reset();
+				m_Window.reset();
+				std::error_code ignored;
+				std::filesystem::current_path(previousDirectory, ignored);
+				return Error(
+					std::format("cannot create the graphics device: {}", device.GetError().Message),
+					device.GetError().Code);
+			}
+			m_GraphicsDevice = std::move(*device);
 		}
 
 		if (m_InputSource == nullptr)
@@ -263,6 +297,10 @@ namespace Gambit
 		}
 		m_Running = false;
 		GB_CORE_INFO("{}: ran {} frames, {} simulation ticks", m_Specification.Name, m_FrameCount, m_Tick);
+		if (m_GraphicsDevice != nullptr)
+		{
+			GB_CORE_INFO("{}: presented {} frames", m_Specification.Name, m_GraphicsDevice->GetFrameCount());
+		}
 		return 0;
 	}
 
@@ -318,9 +356,34 @@ namespace Gambit
 		UpdateLayers(TimeStep(frameSeconds, m_Tick));
 		if (!m_Minimized)
 		{
-			RenderLayers(m_Clock.GetAlpha());
+			RenderFrame(m_Clock.GetAlpha());
 		}
 		++m_FrameCount;
+	}
+
+	void Application::RenderFrame(float alpha)
+	{
+		if (m_GraphicsDevice == nullptr)
+		{
+			RenderLayers(alpha);
+			return;
+		}
+		if (m_Window != nullptr && m_Window->IsVSync() != m_GraphicsDevice->IsVSync())
+		{
+			m_GraphicsDevice->SetVSync(m_Window->IsVSync());
+		}
+		if (m_GraphicsDevice->BeginFrame())
+		{
+			RenderLayers(alpha);
+			m_GraphicsDevice->Present();
+		}
+		if (m_GraphicsDevice->IsDeviceLost() && !m_DeviceLossHandled)
+		{
+			// Nothing can be rendered any more (BeginFrame returns false from now on): end the run.
+			GB_CORE_ERROR("{}: closing, the graphics device was lost", m_Specification.Name);
+			m_DeviceLossHandled = true;
+			Close();
+		}
 	}
 
 	void Application::StepFixed(const InputFrame& input)

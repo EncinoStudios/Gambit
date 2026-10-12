@@ -12,7 +12,10 @@ TEST_CASE("Core: Gambit.h includes the public engine headers")
 	const Gambit::InputFrame frame;
 	const Gambit::ApplicationSpecification specification;
 	const Gambit::WindowSpecification window;
+	const Gambit::GraphicsDeviceSpecification graphics;
 	CHECK(id.IsValid());
+	CHECK(graphics.FramesInFlight == 2);
+	CHECK_FALSE(Gambit::ShaderLibrary::Find("FullscreenTriangle.vert").empty());
 	CHECK(random.GetState().Increment == 1);
 	CHECK(frame.TextCount == 0);
 	CHECK(specification.SimulationHz == 60);

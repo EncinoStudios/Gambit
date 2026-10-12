@@ -13,8 +13,8 @@ Every dependency is a pinned git submodule (D-003). Rules:
 | Dependency | Path | Pinned ref | Commit | License | Status |
 |---|---|---|---|---|---|
 | GLFW | `glfw` | tag `3.4` | `7b6aead9fb88` | zlib/libpng | wired: `glfw::glfw` |
-| NVRHI | `nvrhi` | `main` HEAD | `6b96fb03e075` | MIT | T07 |
-| Vulkan-Headers | `Vulkan-Headers` | tag `v1.4.352` | `015e25c3c91b` | Apache-2.0 / MIT | T07 (see note) |
+| NVRHI | `nvrhi` | `main` HEAD | `6b96fb03e075` | MIT | wired: `nvrhi` + `nvrhi_vk` (Vulkan backend and validation layer only) |
+| Vulkan-Headers | `Vulkan-Headers` | tag `v1.4.352` | `015e25c3c91b` | Apache-2.0 / MIT | wired: `Vulkan::Headers` (see note) |
 | glm | `glm` | tag `1.0.3` | `8d1fd52e5ab5` | MIT | wired: `glm::glm` |
 | Dear ImGui | `imgui` | branch `docking` HEAD | `778992face67` | MIT | T20 |
 | ImGuizmo | `ImGuizmo` | `master` HEAD | `105e4fde45e4` | MIT | T20 |
@@ -23,11 +23,11 @@ Every dependency is a pinned git submodule (D-003). Rules:
 | Lua | `lua` | tag `v5.4.8` | `6e22fedb74cf` | MIT | T11 |
 | sol2 | `sol2` | tag `v3.5.0` | `9190880c593d` | MIT | T11 |
 | miniaudio | `miniaudio` | tag `0.11.25` | `9634bedb5b5a` | public domain / MIT-0 | T16 |
-| stb | `stb` | `master` HEAD | `2c980bb59875` | public domain / MIT | wired: `stb::stb` (headers only) |
+| stb | `stb` | `master` HEAD | `2c980bb59875` | public domain / MIT | wired: `stb::stb` (headers; the engine compiles `stb_image` + `stb_image_write` once, without stdio) |
 | cgltf | `cgltf` | tag `v1.15` | `360db1a95480` | MIT | T08 |
 | nlohmann/json | `nlohmann_json` | tag `v3.12.0` | `55f93686c015` | MIT | wired: `nlohmann_json::nlohmann_json` |
 | doctest | `doctest` | tag `v2.5.3` | `2d0a9359a60c` | MIT | wired: `doctest::doctest` |
-| glslang | `glslang` | tag `vulkan-sdk-1.4.363.0` | `e1b562a8bed2` | BSD-3-Clause (+ Apache-2.0, MIT parts; see `LICENSE.txt`) | T07 (see note) |
+| glslang | `glslang` | tag `vulkan-sdk-1.4.363.0` | `e1b562a8bed2` | BSD-3-Clause (+ Apache-2.0, MIT parts; see `LICENSE.txt`) | wired: `glslang-standalone` (build-time shader compiler, see note) |
 | nanosvg | `nanosvg` | `master` HEAD | `239e102ec2c6` | zlib | T18 |
 | earcut.hpp | `earcut.hpp` | tag `v3.2.4` | `92acda9e2ed9` | ISC | T18 |
 | cpp-httplib | `cpp-httplib` | tag `v0.60.1` | `00afaaed6aab` | MIT | T24 |
@@ -43,13 +43,14 @@ the expected version, so an accidental submodule bump fails CI.
 
 - **NVRHI / Vulkan-Headers.** NVRHI's `main` no longer carries Vulkan-Headers as a submodule; its CMake downloads
   Vulkan-Headers v1.4.352 with `FetchContent` at configure time. To keep builds hermetic and offline-capable the
-  headers are pinned here as `Vulkan-Headers` at that same tag. T07 should create the `Vulkan::Headers` target from
-  it (NVRHI uses an existing target) and set `NVRHI_FETCH_VULKAN_HEADERS=OFF`, `NVRHI_WITH_DX11=OFF`,
-  `NVRHI_WITH_DX12=OFF`.
-- **glslang.** Building glslang with the optimizer needs SPIRV-Tools and SPIRV-Headers, which upstream normally fetches
-  with `update_glslang_sources.py` into `glslang/External/` (that would modify the submodule). T07 must either pin
-  those two as extra submodules at the revisions in `glslang/known_good.json` or build glslang with
-  `ENABLE_OPT=OFF`.
+  headers are pinned here as `Vulkan-Headers` at that same tag and `ThirdParty/CMakeLists.txt` defines
+  `Vulkan::Headers` from them (with `VK_NO_PROTOTYPES` and `VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1`, which every user of
+  `vulkan.hpp` must share with NVRHI); NVRHI is configured with `NVRHI_FETCH_VULKAN_HEADERS=OFF`, no D3D backends, no
+  install rules.
+- **glslang.** Only the standalone compiler is built, with `ENABLE_OPT=OFF` (no SPIRV-Tools / SPIRV-Headers needed),
+  no HLSL front end and no tests; it lands in `build/<Config>/tools/`. Its own build runs a Python 3 script to generate
+  a header, so building the engine needs Python 3 (the developer scripts need it anyway); the shader embedding itself
+  is plain CMake.
 - **Updating a dependency.** `git -C ThirdParty/<name> fetch --depth 1 origin tag <tag>`, check it out, stage the
   submodule, update the table above and the smoke test that pins its version, and add a DECISIONS entry if the
   change is more than a patch bump.

@@ -11,7 +11,10 @@
 #include <monocypher-ed25519.h>
 #include <monocypher.h>
 #include <nlohmann/json.hpp>
+#include <nvrhi/nvrhi.h>
 #include <stb_image.h>
+#include <stb_image_write.h>
+#include <vulkan/vulkan_core.h>
 #include <xxhash.h>
 
 #include <array>
@@ -190,4 +193,30 @@ TEST_CASE("ThirdParty: Monocypher Ed25519 matches RFC 8032 test vector 1")
 TEST_CASE("ThirdParty: stb headers are on the include path")
 {
 	CHECK(STBI_VERSION == 1);
+
+	// The engine compiles stb with STBI_NO_STDIO / STBI_WRITE_NO_STDIO (all IO goes through the VFS, D-014), so the
+	// in-memory API is what is used: one pixel through PNG and back.
+	const std::array<uint8_t, 4> pixel = { 10, 200, 30, 255 };
+	std::vector<uint8_t> png;
+	const auto append = [](void* context, void* data, int size) {
+		auto* bytes = static_cast<std::vector<uint8_t>*>(context);
+		bytes->insert(bytes->end(), static_cast<uint8_t*>(data), static_cast<uint8_t*>(data) + size);
+	};
+	REQUIRE(stbi_write_png_to_func(append, &png, 1, 1, 4, pixel.data(), 4) != 0);
+	int width = 0;
+	int height = 0;
+	int channels = 0;
+	stbi_uc* decoded = stbi_load_from_memory(png.data(), static_cast<int>(png.size()), &width, &height, &channels, 4);
+	REQUIRE(decoded != nullptr);
+	CHECK(width == 1);
+	CHECK(height == 1);
+	CHECK(std::memcmp(decoded, pixel.data(), pixel.size()) == 0);
+	stbi_image_free(decoded);
+}
+
+TEST_CASE("ThirdParty: Vulkan-Headers and NVRHI are the pinned versions")
+{
+	CHECK(VK_HEADER_VERSION == 352);
+	CHECK(nvrhi::c_HeaderVersion == 27);
+	CHECK(nvrhi::verifyHeaderVersion());
 }

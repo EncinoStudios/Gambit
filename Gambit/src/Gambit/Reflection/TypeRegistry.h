@@ -49,6 +49,8 @@ namespace Gambit
 	class ComponentBuilder;
 	template<typename E>
 	class EnumBuilder;
+	template<typename S>
+	class StructBuilder;
 
 	// The single source of truth about component types (D-022): every C++ component is registered here once (one
 	// registration function per module, see RegisterEngineTypes), script components are registered at runtime, and
@@ -83,6 +85,14 @@ namespace Gambit
 		// Registers enum E; fields of type E then become Enum fields. Register enums before the components using them.
 		template<typename E>
 		EnumBuilder<E> RegisterEnum(std::string_view name);
+
+		// Registers struct S under `name`; fields of type S (and std::vector<S>) in components and in other structs
+		// then become Struct (Array of Struct) fields. Add the struct's own fields with the returned builder, like
+		// those of a component. Register structs before the types that use them. S must be a plain,
+		// default-constructible and copyable class (D-020). Names are identifiers in a namespace of their own;
+		// registering a name or type twice is a programmer error (verified).
+		template<typename S>
+		StructBuilder<S> RegisterStruct(std::string_view name);
 
 		// Registers a script component. Registering an identical schema under an existing name returns the existing
 		// type (scripts are reloaded); a different schema under a taken name, an invalid name or an inconsistent
@@ -120,6 +130,16 @@ namespace Gambit
 			return found == m_EnumsByType.end() ? nullptr : found->second;
 		}
 
+		[[nodiscard]] Ref<const StructInfo> FindStruct(std::string_view name) const;
+		template<typename S>
+		[[nodiscard]] Ref<const StructInfo> FindStruct() const
+		{
+			const auto found = m_StructsByType.find(entt::type_index<S>::value());
+			return found == m_StructsByType.end() ? nullptr : found->second;
+		}
+		// Every registered struct, sorted by name (byte-wise). The span is invalidated by the next registration.
+		[[nodiscard]] std::span<const StructInfo* const> GetStructs() const noexcept { return m_SortedStructs; }
+
 		// Changes with every registration and unregistration, so caches of lookups can tell when to refresh.
 		[[nodiscard]] uint64_t GetGeneration() const noexcept { return m_Generation; }
 
@@ -128,12 +148,16 @@ namespace Gambit
 		friend class ComponentBuilder;
 		template<typename E>
 		friend class EnumBuilder;
+		template<typename S>
+		friend class StructBuilder;
 		friend class World;
 
 		ComponentInfo& AddComponent(Scope<ComponentInfo> info, std::optional<uint32_t> typeIndex);
 		void AddField(ComponentInfo& component, FieldInfo field);
 		EnumInfo& AddEnum(std::string_view name, uint32_t typeIndex);
 		void AddEnumEntry(EnumInfo& info, std::string_view name, int64_t value);
+		StructInfo& AddStruct(std::string_view name, uint32_t typeIndex);
+		void AddStructField(StructInfo& info, FieldInfo field);
 		void RebuildSortedList();
 
 		void AttachWorld(World& world);
@@ -145,6 +169,9 @@ namespace Gambit
 		std::vector<const ComponentInfo*> m_Sorted;
 		std::map<std::string, Ref<EnumInfo>, std::less<>> m_Enums;
 		std::unordered_map<uint32_t, Ref<EnumInfo>> m_EnumsByType;
+		std::map<std::string, Ref<StructInfo>, std::less<>> m_Structs; // by name
+		std::unordered_map<uint32_t, Ref<StructInfo>> m_StructsByType;
+		std::vector<const StructInfo*> m_SortedStructs;
 		std::vector<World*> m_Worlds;
 		uint64_t m_Generation = 0;
 	};
@@ -162,19 +189,38 @@ namespace Gambit
 		}
 
 		template<typename S>
-		FieldValue ReadStored(const void* storage)
+		FieldValue ReadStored(const FieldInfo&, const void* storage)
 		{
 			return FieldValue(std::in_place_type<S>, *static_cast<const S*>(storage));
 		}
 
 		template<typename S>
-		void WriteStored(void* storage, const FieldValue& value)
+		void WriteStored(const FieldInfo&, void* storage, const FieldValue& value)
 		{
 			*static_cast<S*>(storage) = *std::get_if<S>(&value);
 		}
 
+		// Struct values of script components are hashed with the struct they hold; everything else as it is stored.
+		template<typename S>
+		void HashStoredField(const FieldInfo& field, Hasher& hasher, const void* storage)
+		{
+			if constexpr (std::is_same_v<S, StructValue>)
+			{
+				HashStructValue(hasher, *field.Attributes.Struct, *static_cast<const StructValue*>(storage));
+			}
+			else if constexpr (std::is_same_v<S, std::vector<StructValue>>)
+			{
+				HashStructValues(
+					hasher, *field.Attributes.Struct, *static_cast<const std::vector<StructValue>*>(storage));
+			}
+			else
+			{
+				HashStored<S>(hasher, storage);
+			}
+		}
+
 		template<typename E>
-		FieldValue ReadEnum(const void* storage)
+		FieldValue ReadEnum(const FieldInfo&, const void* storage)
 		{
 			using Underlying = std::underlying_type_t<E>;
 			return FieldValue(
@@ -183,10 +229,63 @@ namespace Gambit
 		}
 
 		template<typename E>
-		void WriteEnum(void* storage, const FieldValue& value)
+		void WriteEnum(const FieldInfo&, void* storage, const FieldValue& value)
 		{
 			using Underlying = std::underlying_type_t<E>;
 			*static_cast<E*>(storage) = static_cast<E>(static_cast<Underlying>(*std::get_if<int64_t>(&value)));
+		}
+
+		template<typename E>
+		void HashEnumField(const FieldInfo&, Hasher& hasher, const void* storage)
+		{
+			HashEnum<E>(hasher, storage);
+		}
+
+		// A C++ struct field: the struct object is read, written and hashed through the fields of its StructInfo.
+		FieldValue ReadStructField(const FieldInfo& field, const void* storage);
+		void WriteStructField(const FieldInfo& field, void* storage, const FieldValue& value);
+		void HashStructField(const FieldInfo& field, Hasher& hasher, const void* storage);
+
+		// A std::vector<S> field of a C++ component or struct. Elements that a written value adds are
+		// default-constructed; those that stay keep the members the struct does not reflect.
+		template<typename S>
+		FieldValue ReadStructArray(const FieldInfo& field, const void* storage)
+		{
+			const StructInfo& info = *field.Attributes.Struct;
+			const auto& elements = *static_cast<const std::vector<S>*>(storage);
+			std::vector<StructValue> values;
+			values.reserve(elements.size());
+			for (const S& element : elements)
+			{
+				values.push_back(info.Read(std::addressof(element)));
+			}
+			return FieldValue(std::in_place_type<std::vector<StructValue>>, std::move(values));
+		}
+
+		template<typename S>
+		void WriteStructArray(const FieldInfo& field, void* storage, const FieldValue& value)
+		{
+			const StructInfo& info = *field.Attributes.Struct;
+			const auto& values = *std::get_if<std::vector<StructValue>>(&value);
+			auto& elements = *static_cast<std::vector<S>*>(storage);
+			elements.resize(values.size());
+			for (size_t index = 0; index < values.size(); ++index)
+			{
+				[[maybe_unused]] const bool written = info.Write(std::addressof(elements[index]), values[index]);
+				GB_CORE_ASSERT(written, "field '{}': an element does not fit its struct", field.Name);
+			}
+		}
+
+		template<typename S>
+		void HashStructArray(const FieldInfo& field, Hasher& hasher, const void* storage)
+		{
+			const StructInfo& info = *field.Attributes.Struct;
+			const auto& elements = *static_cast<const std::vector<S>*>(storage);
+			hasher.UpdateValue(static_cast<uint64_t>(elements.size()));
+			for (const S& element : elements)
+			{
+				info.Hash(hasher, std::addressof(element));
+			}
 		}
 
 		template<typename T>
@@ -209,10 +308,79 @@ namespace Gambit
 		void ApplyAttribute(FieldInfo& field, const Attr::Category& category);
 		void ApplyAttribute(FieldInfo& field, const Attr::AssetType& assetType);
 		void ApplyAttribute(FieldInfo& field, const Attr::Color& color);
+		void ApplyAttribute(FieldInfo& field, const Attr::PlainUUID& plainUUID);
 		void ApplyAttribute(FieldInfo& field, const Attr::Hidden& hidden);
 		void ApplyAttribute(FieldInfo& field, const Attr::ReadOnly& readOnly);
 		void ApplyAttribute(FieldInfo& field, const Attr::NotSerialized& notSerialized);
 		void ApplyAttribute(FieldInfo& field, const Attr::NotHashed& notHashed);
+
+		// Describes the member `member` of `Owner` (a component or a struct; `ownerName` is for messages). The
+		// field's default is the member's value in `defaults`.
+		template<typename Owner, typename F, typename... AttributeTypes>
+		FieldInfo MakeFieldInfo(
+			const TypeRegistry& registry, std::string_view ownerName, std::string_view name, F Owner::*member,
+			const Owner& defaults, const AttributeTypes&... attributes)
+		{
+			using Element = typename ArrayElement<F>::Type;
+
+			FieldInfo field;
+			field.Name = std::string(name);
+			if constexpr (std::is_enum_v<F>)
+			{
+				using Underlying = std::underlying_type_t<F>;
+				static_assert(
+					std::is_signed_v<Underlying> || sizeof(Underlying) < sizeof(int64_t),
+					"enum fields are stored as int64: 64-bit unsigned enums are not supported");
+				field.Type = FieldType::Enum;
+				field.Attributes.Enum = registry.template FindEnum<F>();
+				GB_CORE_VERIFY(
+					field.Attributes.Enum != nullptr, "field '{}.{}': register enum {} before the type using it",
+					ownerName, name, entt::type_name<F>::value());
+				field.Access.Read = &ReadEnum<F>;
+				field.Access.Write = &WriteEnum<F>;
+				field.Access.Hash = &HashEnumField<F>;
+			}
+			else if constexpr (IsStructType<Element>)
+			{
+				field.Attributes.Struct = registry.template FindStruct<Element>();
+				GB_CORE_VERIFY(
+					field.Attributes.Struct != nullptr, "field '{}.{}': register struct {} before the type using it",
+					ownerName, name, entt::type_name<Element>::value());
+				if constexpr (ArrayElement<F>::IsArray)
+				{
+					field.Type = FieldType::Array;
+					field.ElementType = FieldType::Struct;
+					field.Access.Read = &ReadStructArray<Element>;
+					field.Access.Write = &WriteStructArray<Element>;
+					field.Access.Hash = &HashStructArray<Element>;
+				}
+				else
+				{
+					field.Type = FieldType::Struct;
+					field.Access.Read = &ReadStructField;
+					field.Access.Write = &WriteStructField;
+					field.Access.Hash = &HashStructField;
+				}
+			}
+			else
+			{
+				static_assert(
+					FieldTypeOf<F>::Type != FieldType::None,
+					"unsupported field type (see ComponentBuilder::Field for the supported ones)");
+				field.Type = FieldTypeOf<F>::Type;
+				field.ElementType = FieldTypeOf<F>::ElementType;
+				field.Access.Read = &ReadStored<F>;
+				field.Access.Write = &WriteStored<F>;
+				field.Access.Hash = &HashStoredField<F>;
+			}
+			field.Access.Locate = &LocateMember<F>;
+			field.Access.Offset = static_cast<size_t>(
+				reinterpret_cast<const std::byte*>(std::addressof(defaults.*member))
+				- reinterpret_cast<const std::byte*>(std::addressof(defaults)));
+			(ApplyAttribute(field, attributes), ...);
+			field.Default = field.Access.Read(field, std::addressof(defaults.*member));
+			return field;
+		}
 	}
 
 	// Adds the fields of a C++ component (TypeRegistry::RegisterComponent). Fields are reflected in call order.
@@ -225,47 +393,14 @@ namespace Gambit
 		{}
 
 		// `member` must be a data member of T of a supported type: bool, int32_t, uint32_t, int64_t, uint64_t, float,
-		// double, glm::vec2/vec3/vec4, glm::quat, std::string, UUID (an entity reference, or an asset handle with
-		// Attr::AssetType), a registered enum, or a std::vector of any of these except enums. The field's default is
-		// its value in a default-constructed T.
+		// double, glm::vec2/vec3/vec4, glm::quat, std::string, UUID (an entity reference, an asset handle with
+		// Attr::AssetType or a plain identifier with Attr::PlainUUID), a registered enum, a registered struct, or a
+		// std::vector of any of these except enums. The field's default is its value in a default-constructed T.
 		template<typename F, typename... AttributeTypes>
 		ComponentBuilder& Field(std::string_view name, F T::*member, const AttributeTypes&... attributes)
 		{
-			FieldInfo field;
-			field.Name = std::string(name);
-			if constexpr (std::is_enum_v<F>)
-			{
-				using Underlying = std::underlying_type_t<F>;
-				static_assert(
-					std::is_signed_v<Underlying> || sizeof(Underlying) < sizeof(int64_t),
-					"enum fields are stored as int64: 64-bit unsigned enums are not supported");
-				field.Type = FieldType::Enum;
-				field.Attributes.Enum = m_Registry.FindEnum<F>();
-				GB_CORE_VERIFY(
-					field.Attributes.Enum != nullptr, "field '{}.{}': register enum {} before the component",
-					m_Info.GetName(), name, entt::type_name<F>::value());
-				field.Access.Read = &Internal::ReadEnum<F>;
-				field.Access.Write = &Internal::WriteEnum<F>;
-				field.Access.Hash = &Internal::HashEnum<F>;
-			}
-			else
-			{
-				static_assert(
-					Internal::FieldTypeOf<F>::Type != FieldType::None,
-					"unsupported field type (see ComponentBuilder::Field for the supported ones)");
-				field.Type = Internal::FieldTypeOf<F>::Type;
-				field.ElementType = Internal::FieldTypeOf<F>::ElementType;
-				field.Access.Read = &Internal::ReadStored<F>;
-				field.Access.Write = &Internal::WriteStored<F>;
-				field.Access.Hash = &Internal::HashStored<F>;
-			}
-			field.Access.Locate = &Internal::LocateMember<F>;
-			field.Access.Offset = static_cast<size_t>(
-				reinterpret_cast<const std::byte*>(std::addressof(m_Defaults.*member))
-				- reinterpret_cast<const std::byte*>(std::addressof(m_Defaults)));
-			(Internal::ApplyAttribute(field, attributes), ...);
-			field.Default = field.Access.Read(std::addressof(m_Defaults.*member));
-			m_Registry.AddField(m_Info, std::move(field));
+			m_Registry.AddField(
+				m_Info, Internal::MakeFieldInfo(m_Registry, m_Info.GetName(), name, member, m_Defaults, attributes...));
 			return *this;
 		}
 
@@ -273,6 +408,30 @@ namespace Gambit
 		TypeRegistry& m_Registry;
 		ComponentInfo& m_Info;
 		T m_Defaults{};
+	};
+
+	// Adds the fields of a C++ struct (TypeRegistry::RegisterStruct); the field types are those of
+	// ComponentBuilder::Field, structs nested in structs included.
+	template<typename S>
+	class StructBuilder
+	{
+	public:
+		StructBuilder(TypeRegistry& registry, StructInfo& info)
+			: m_Registry(registry), m_Info(info)
+		{}
+
+		template<typename F, typename... AttributeTypes>
+		StructBuilder& Field(std::string_view name, F S::*member, const AttributeTypes&... attributes)
+		{
+			m_Registry.AddStructField(
+				m_Info, Internal::MakeFieldInfo(m_Registry, m_Info.GetName(), name, member, m_Defaults, attributes...));
+			return *this;
+		}
+
+	private:
+		TypeRegistry& m_Registry;
+		StructInfo& m_Info;
+		S m_Defaults{};
 	};
 
 	// Adds the values of a C++ enum (TypeRegistry::RegisterEnum).
@@ -320,5 +479,16 @@ namespace Gambit
 	{
 		static_assert(std::is_enum_v<E>, "RegisterEnum needs an enum type");
 		return EnumBuilder<E>(*this, AddEnum(name, entt::type_index<E>::value()));
+	}
+
+	template<typename S>
+	StructBuilder<S> TypeRegistry::RegisterStruct(std::string_view name)
+	{
+		static_assert(std::is_class_v<S> && !std::is_polymorphic_v<S>, "structs are plain data (D-020)");
+		static_assert(
+			std::is_default_constructible_v<S> && std::is_copy_constructible_v<S> && std::is_copy_assignable_v<S>,
+			"structs must be default-constructible and copyable");
+		static_assert(Internal::IsStructType<S>, "this type is a built-in field type, not a struct");
+		return StructBuilder<S>(*this, AddStruct(name, entt::type_index<S>::value()));
 	}
 }

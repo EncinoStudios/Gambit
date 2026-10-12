@@ -2,13 +2,15 @@
 
 #include "Gambit/Reflection/FieldType.h"
 
+#include "Gambit/Reflection/FieldInfo.h"
+
 namespace Gambit
 {
 	namespace
 	{
 		constexpr std::array<std::string_view, static_cast<size_t>(FieldType::Array) + 1> FieldTypeNames = {
-			"None", "Bool", "Int32",  "UInt32", "Int64",  "UInt64", "Float",       "Double", "Vec2", "Vec3",
-			"Vec4", "Quat", "Color3", "Color4", "String", "Entity", "AssetHandle", "Enum",   "Array"
+			"None", "Bool",   "Int32",  "UInt32", "Int64",  "UInt64",      "Float", "Double", "Vec2",   "Vec3", "Vec4",
+			"Quat", "Color3", "Color4", "String", "Entity", "AssetHandle", "UUID",  "Enum",   "Struct", "Array"
 		};
 
 		// Spelled out for the glm types so the result never depends on how glm's default constructors are configured.
@@ -88,7 +90,12 @@ namespace Gambit
 		});
 	}
 
-	FieldValue MakeZeroValue(FieldType type, FieldType elementType)
+	bool operator==(const StructValue& a, const StructValue& b)
+	{
+		return a.Values == b.Values;
+	}
+
+	FieldValue MakeZeroValue(FieldType type, FieldType elementType, const StructInfo* structInfo)
 	{
 		if (type == FieldType::Array)
 		{
@@ -98,6 +105,11 @@ namespace Gambit
 			});
 		}
 		GB_CORE_ASSERT(elementType == FieldType::None, "only arrays have an element type");
+		if (type == FieldType::Struct)
+		{
+			GB_CORE_ASSERT(structInfo != nullptr, "a Struct value needs its StructInfo");
+			return structInfo->GetDefault();
+		}
 		return Internal::VisitStorageType(
 			type, []<typename T>(std::type_identity<T>) { return FieldValue(std::in_place_type<T>, ZeroOf<T>()); });
 	}

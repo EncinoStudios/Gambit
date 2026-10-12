@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +14,8 @@
 namespace Gambit
 {
 	class Hasher;
+	class StructInfo;
+	struct FieldInfo;
 
 	// Per-field behaviour flags (D-022).
 	enum class FieldFlags : uint8_t
@@ -78,10 +81,11 @@ namespace Gambit
 		std::string Category;     // inspector grouping, e.g. "Physics"
 		std::string AssetType;    // AssetHandle fields (and arrays of them): the asset type they accept, e.g. "Texture"
 		Ref<const EnumInfo> Enum; // Enum fields: their values
+		Ref<const StructInfo> Struct; // Struct fields (and arrays of them): the struct they hold
 
 		[[nodiscard]] bool HasFlag(FieldFlags flag) const noexcept { return Gambit::HasFlag(Flags, flag); }
 
-		// Compares the enum by content, not by identity.
+		// Compares the enum by content and the struct by name, not by identity.
 		[[nodiscard]] bool IsEquivalent(const FieldAttributes& other) const noexcept;
 	};
 
@@ -110,6 +114,10 @@ namespace Gambit
 		// Makes a glm::vec3 / glm::vec4 field (or an array of them) a Color3 / Color4 field.
 		struct Color
 		{};
+		// Makes a UUID field (or an array of UUIDs) a plain UUID field: an identifier that is not a reference to an
+		// entity or an asset, so copying and instantiating entities never remap it.
+		struct PlainUUID
+		{};
 		struct Hidden
 		{};
 		struct ReadOnly
@@ -129,9 +137,10 @@ namespace Gambit
 		{
 			size_t Offset = 0; // byte offset, or value index for DynamicComponent fields
 			void* (*Locate)(void* component, size_t offset) = nullptr;
-			FieldValue (*Read)(const void* storage) = nullptr;
-			void (*Write)(void* storage, const FieldValue& value) = nullptr;
-			void (*Hash)(Hasher& hasher, const void* storage) = nullptr;
+			// The field is passed along because struct fields need their StructInfo (FieldAttributes::Struct).
+			FieldValue (*Read)(const FieldInfo& field, const void* storage) = nullptr;
+			void (*Write)(const FieldInfo& field, void* storage, const FieldValue& value) = nullptr;
+			void (*Hash)(const FieldInfo& field, Hasher& hasher, const void* storage) = nullptr;
 		};
 	}
 
@@ -148,8 +157,8 @@ namespace Gambit
 
 		[[nodiscard]] bool HasFlag(FieldFlags flag) const noexcept { return Attributes.HasFlag(flag); }
 
-		// Whether SetValue accepts `value`: the right FieldValue alternative and, for Enum fields, one of the enum's
-		// values.
+		// Whether SetValue accepts `value`: the right FieldValue alternative, one of the enum's values for Enum fields
+		// and, for struct fields and arrays of structs, struct values that fit the struct (StructInfo::CanHold).
 		[[nodiscard]] bool CanHold(const FieldValue& value) const noexcept;
 
 		[[nodiscard]] FieldValue GetValue(const void* component) const;
@@ -159,10 +168,55 @@ namespace Gambit
 		// fields of the same type (Reflection/FieldHashing.h).
 		void HashValue(Hasher& hasher, const void* component) const;
 
-		// The field's storage: a T* for a field stored as T (the FieldValue alternative of its type). Enum fields are
-		// the exception: C++ enum fields point to the enum itself, script ones to an int64_t; use GetValue/SetValue for
-		// them.
+		// The field's storage: a T* for a field stored as T (the FieldValue alternative of its type). Enum and struct
+		// fields are the exception: C++ enum fields point to the enum itself, script ones to an int64_t; C++ struct
+		// fields point to the struct object (and arrays of structs to the std::vector of it), script ones to a
+		// StructValue; use GetValue/SetValue for them.
 		[[nodiscard]] void* GetRawPointer(void* component) const noexcept;
 		[[nodiscard]] const void* GetRawPointer(const void* component) const noexcept;
+	};
+
+	// A reflected struct (D-022): plain data with named fields that is nested in components or in other structs, alone
+	// or as an array (Animator layers, particle modules, materials, events). Registered once with
+	// TypeRegistry::RegisterStruct. Its fields are FieldInfos like those of components, so serialization, hashing, the
+	// inspector, Lua and the CLI treat a struct field as one value with named sub-fields. Created and owned by a
+	// TypeRegistry; shared with the FieldAttributes that refer to it.
+	class StructInfo
+	{
+		struct ConstructionKey
+		{
+			explicit ConstructionKey() = default;
+		};
+
+	public:
+		explicit StructInfo(ConstructionKey) {}
+
+		[[nodiscard]] const std::string& GetName() const noexcept { return m_Name; }
+		// In registration (declaration) order.
+		[[nodiscard]] std::span<const FieldInfo> GetFields() const noexcept { return m_Fields; }
+		[[nodiscard]] const FieldInfo* FindField(std::string_view name) const noexcept;
+		// The position of a field in GetFields() and in StructValue::Values.
+		[[nodiscard]] std::optional<size_t> FindFieldIndex(std::string_view name) const noexcept;
+		// The value of a default-constructed struct: the default of every field.
+		[[nodiscard]] const StructValue& GetDefault() const noexcept { return m_Default; }
+
+		// Whether `value` has one value per field and each is one that the field can hold (FieldInfo::CanHold).
+		[[nodiscard]] bool CanHold(const StructValue& value) const noexcept;
+
+		// Reads and writes a C++ struct object (a `T` registered with RegisterStruct) field by field. Write returns
+		// false, changing nothing, when CanHold(value) is false. Struct fields of script components hold StructValues
+		// instead and are reached through their FieldInfo.
+		[[nodiscard]] StructValue Read(const void* object) const;
+		[[nodiscard]] bool Write(void* object, const StructValue& value) const;
+		// Feeds the object to a state hash (D-013) without copying it: the fields without NotHashed, in order. The same
+		// bytes as HashStructValue gives for the value Read returns.
+		void Hash(Hasher& hasher, const void* object) const;
+
+	private:
+		friend class TypeRegistry;
+
+		std::string m_Name;
+		std::vector<FieldInfo> m_Fields;
+		StructValue m_Default;
 	};
 }

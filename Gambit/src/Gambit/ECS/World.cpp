@@ -13,7 +13,7 @@ namespace Gambit
 	{
 		constexpr std::string_view DefaultEntityName = "Entity";
 		// Versions the layout of the state hash: change it whenever what is hashed, or how, changes.
-		constexpr uint64_t StateHashSeed = "Gambit.World.StateHash.1"_hash;
+		constexpr uint64_t StateHashSeed = "Gambit.World.StateHash.2"_hash;
 	}
 
 	World::World()
@@ -81,7 +81,7 @@ namespace Gambit
 			for (size_t index = 0; index < storage->size(); ++index)
 			{
 				const entt::entity handle = storage->data()[index];
-				info->CopyTo(source, handle, destination, handle);
+				info->CopyToUnchecked(source, handle, destination, handle);
 			}
 		}
 		destination.m_SuspendInactiveUpdates = false;
@@ -428,10 +428,15 @@ namespace Gambit
 		std::ranges::sort(entities, {}, &std::pair<UUID, entt::entity>::first);
 		hasher.UpdateValue(static_cast<uint64_t>(entities.size()));
 
-		// Components by name; types this world never stored have no storage and are skipped up front.
+		// Components by name; types this world never stored have no storage and are skipped up front, and derived
+		// components (recomputed from the hashed state, even their presence) are left out.
 		std::vector<std::pair<const ComponentInfo*, const entt::sparse_set*>> storages;
 		for (const ComponentInfo* info : m_Types.GetComponents())
 		{
+			if (info->HasFlag(ComponentFlags::Derived))
+			{
+				continue;
+			}
 			if (const entt::sparse_set* storage = info->FindStorage(*this); storage != nullptr)
 			{
 				storages.emplace_back(info, storage);

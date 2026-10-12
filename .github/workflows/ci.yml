@@ -54,6 +54,10 @@ jobs:
         with:
           key: linux-${{ matrix.compiler }}-${{ matrix.config }}
 
+      - name: Script tests (the build failure report of scripts/build.py)
+        if: matrix.format
+        run: python3 -m unittest discover -s scripts -p "test_*.py"
+
       - name: Check (format, build, tests incl. GPU on lavapipe)
         run: |
           # PCH off: GCC precompiled headers are not byte-reproducible, so ccache would miss on a fresh build directory.

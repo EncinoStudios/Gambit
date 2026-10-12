@@ -76,8 +76,9 @@ TEST_CASE("Reflection: components are found by name, id and type")
 	CHECK(std::ranges::is_sorted(names));
 	CHECK(
 		names
-		== std::vector<std::string>{ "AllTypes", "Disabled", "Health", "ID", "Inactive", "PlayerTag", "Relationship",
-	                                 "Tag", "Transform", "WorldTransform" });
+		== std::vector<std::string>{ "AllTypes", "DataRef", "Disabled", "Health", "ID", "Inactive", "PlayerTag",
+	                                 "PrefabInstance", "Relationship", "Structs", "Tag", "Transform",
+	                                 "WorldTransform" });
 }
 
 TEST_CASE("Reflection: the process-wide registry has the core components")
@@ -102,12 +103,15 @@ TEST_CASE("Reflection: the process-wide registry has the core components")
 	CHECK(relationship.FindField("Children")->Type == FieldType::Array);
 	CHECK(relationship.FindField("Children")->ElementType == FieldType::Entity);
 	CHECK(relationship.FindField("Children")->HasFlag(FieldFlags::ReadOnly));
-	CHECK(relationship.HasFlag(ComponentFlags::Serializable));
+	CHECK_FALSE(relationship.HasFlag(ComponentFlags::Serializable)); // files store each entity's parent instead
 	CHECK(relationship.HasFlag(ComponentFlags::Internal));
 	CHECK_FALSE(registry.GetComponent<IDComponent>().HasFlag(ComponentFlags::Serializable));
 	CHECK_FALSE(registry.GetComponent<TagComponent>().HasFlag(ComponentFlags::Removable));
 	CHECK(registry.GetComponent<DisabledComponent>().IsTag());
 	CHECK(registry.GetComponent<WorldTransformComponent>().GetFields().empty());
+	CHECK(registry.GetComponent<WorldTransformComponent>().HasFlag(ComponentFlags::Derived));
+	CHECK(registry.GetComponent<WorldTransformComponent>().HasFlag(ComponentFlags::Internal));
+	CHECK_FALSE(registry.GetComponent<TransformComponent>().HasFlag(ComponentFlags::Derived));
 }
 
 TEST_CASE("Reflection: every field type is read and written through FieldValue")
@@ -282,10 +286,10 @@ TEST_CASE("Reflection: component operations work on a world")
 	CHECK_FALSE(health.SetFieldValue(second, "Current", 1.0f)); // no component
 
 	// CopyTo adds, then replaces in place.
-	health.CopyTo(first, second);
+	CHECK(health.CopyTo(first, second));
 	CHECK(second.GetComponent<HealthComponent>().Current == 42.0f);
 	first.GetComponent<HealthComponent>().Current = 7.0f;
-	health.CopyTo(first, second);
+	CHECK(health.CopyTo(first, second));
 	CHECK(second.GetComponent<HealthComponent>().Current == 7.0f);
 
 	// Tags: presence only.
@@ -293,7 +297,7 @@ TEST_CASE("Reflection: component operations work on a world")
 	CHECK(player.Has(second));
 	CHECK(player.GetRaw(second) != nullptr);
 	CHECK(second.HasComponent<PlayerTagComponent>());
-	player.CopyTo(second, first);
+	CHECK(player.CopyTo(second, first));
 	CHECK(first.HasComponent<PlayerTagComponent>());
 
 	std::vector<std::string> visited;
@@ -317,7 +321,47 @@ TEST_CASE("Reflection: component operations work on a world")
 	CHECK_FALSE(inactive.Has(first));
 	CHECK(first.HasComponent<IDComponent>());
 	CHECK(id.Has(first));
-	CHECK(static_cast<const IDComponent*>(id.GetRaw(first))->ID == first.GetUUID());
+	CHECK(static_cast<const IDComponent*>(id.GetRaw(world, first.GetHandle()))->ID == first.GetUUID());
+}
+
+TEST_CASE("Reflection: generic operations never write Internal components")
+{
+	TypeRegistry registry;
+	RegisterTestTypes(registry);
+	World world(registry);
+	Entity parent = world.CreateEntityWithUUID(UUID(10), "Parent");
+	Entity child = world.CreateEntityWithUUID(UUID(20), "Child");
+	Entity other = world.CreateEntityWithUUID(UUID(30), "Other");
+	REQUIRE(world.SetParent(child, parent).HasValue());
+	const ComponentInfo& id = registry.GetComponent<IDComponent>();
+	const ComponentInfo& relationship = registry.GetComponent<RelationshipComponent>();
+	const uint64_t hash = world.ComputeStateHash();
+
+	// No writable access to the raw component, and no write through a field name.
+	CHECK(id.GetRaw(parent) == nullptr);
+	CHECK(relationship.GetRaw(child) == nullptr);
+	CHECK_FALSE(id.SetFieldValue(parent, "ID", UUID(99)));
+	CHECK_FALSE(relationship.SetFieldValue(child, "Parent", UUID(30)));
+	CHECK_FALSE(relationship.SetFieldValue(parent, "Children", std::vector<UUID>{ UUID(30) }));
+	CHECK(world.TryGetEntity(UUID(99)) == Entity());
+	CHECK(world.GetParent(child) == parent);
+
+	// Copying would duplicate an identity or corrupt the hierarchy.
+	CHECK_FALSE(id.CopyTo(parent, other));
+	CHECK_FALSE(relationship.CopyTo(parent, other));
+	CHECK(other.GetUUID() == UUID(30));
+	CHECK(world.GetChildren(other).empty());
+
+	// ForEach does not hand out the raw storage of Internal components.
+	size_t visited = 0;
+	id.ForEach(world, [&](Entity, void*) { ++visited; });
+	CHECK(visited == 0);
+
+	// Reading stays possible.
+	CHECK(id.GetFieldValue(parent, "ID") == FieldValue(UUID(10)));
+	CHECK(relationship.GetFieldValue(child, "Parent") == FieldValue(UUID(10)));
+	CHECK(relationship.GetFieldValue(parent, "Children") == FieldValue(std::vector<UUID>{ UUID(20) }));
+	CHECK(world.ComputeStateHash() == hash);
 }
 
 TEST_CASE("Reflection: ForEach visits a snapshot and tolerates structural changes")

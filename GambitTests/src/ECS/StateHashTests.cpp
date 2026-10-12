@@ -162,9 +162,9 @@ TEST_CASE("ECS: changing any hashed field changes the state hash")
 			});
 		CHECK(world.ComputeStateHash() == original); // restored
 	}
-	// Every hashed field: AllTypes 33, the script schema 13, Transform 3, Health 2, and per entity Tag, ID and the
-	// two Relationship fields.
-	CHECK(hashed == 33 + 13 + 3 + 2 + 3 * (1 + 1 + 2));
+	// Every hashed field that generic access may write: AllTypes 33, the script schema 13, Transform 3, Health 2 and
+	// the Tag of each entity. Identity and hierarchy are Internal components, covered by their own tests.
+	CHECK(hashed == 33 + 13 + 3 + 2 + 3);
 	CHECK(unhashed == 2); // AllTypes.Cache, ScriptStats.Debug
 
 	// Presence of components, tags, entities and the simulation resources count too.
@@ -362,4 +362,69 @@ TEST_CASE("ECS: World::Copy keeps root order and storage order")
 	}
 	CHECK(entityStorage(*copy) == entityStorage(source));
 	CHECK(copy->ComputeStateHash() == source.ComputeStateHash());
+}
+
+TEST_CASE("ECS: derived components do not take part in the state hash, not even their presence")
+{
+	TestWorld without;
+	TestWorld with;
+	for (World* world : { without.Scene.get(), with.Scene.get() })
+	{
+		Entity entity = world->CreateEntityWithUUID(UUID(1), "Moving");
+		entity.AddComponent<TransformComponent>().Translation = { 1.0f, 2.0f, 3.0f };
+	}
+	REQUIRE(with.Scene->GetScheduler().AddSystem(CreateScope<TransformSystem>()).HasValue());
+
+	const uint64_t before = with.Scene->ComputeStateHash();
+	CHECK(before == without.Scene->ComputeStateHash());
+	with.Scene->Tick(TimeStep(1.0f / 60.0f), SimulationMode::Edit); // computes WorldTransform, advances nothing
+	REQUIRE(with.Scene->TryGetEntity(UUID(1)).HasComponent<WorldTransformComponent>());
+	CHECK(with.Scene->ComputeStateHash() == before);
+
+	// Its value changes with the transform, and still the hash only follows the transform.
+	with.Scene->TryGetEntity(UUID(1)).GetComponent<TransformComponent>().Translation.x = 5.0f;
+	without.Scene->TryGetEntity(UUID(1)).GetComponent<TransformComponent>().Translation.x = 5.0f;
+	with.Scene->Tick(TimeStep(1.0f / 60.0f), SimulationMode::Edit);
+	CHECK(with.Scene->ComputeStateHash() == without.Scene->ComputeStateHash());
+
+	// The copy reproduces the derived component even though it is not hashed.
+	const Scope<World> copy = World::Copy(*with.Scene);
+	CHECK(copy->TryGetEntity(UUID(1)).HasComponent<WorldTransformComponent>());
+	CHECK(copy->ComputeStateHash() == with.Scene->ComputeStateHash());
+}
+
+TEST_CASE("ECS: the state hash covers identity, hierarchy and sibling order")
+{
+	const auto build = [](TestWorld& fixture, UUID parentOfB, bool bBeforeC) {
+		World& world = *fixture.Scene;
+		Entity a = world.CreateEntityWithUUID(UUID(1), "A");
+		Entity b = world.CreateEntityWithUUID(UUID(2), "B");
+		Entity c = world.CreateEntityWithUUID(UUID(3), "C");
+		REQUIRE(world.SetParent(bBeforeC ? b : c, a).HasValue());
+		REQUIRE(world.SetParent(bBeforeC ? c : b, a).HasValue());
+		if (parentOfB.IsValid())
+		{
+			REQUIRE(world.SetParent(b, world.TryGetEntity(parentOfB)).HasValue());
+		}
+		return world.ComputeStateHash();
+	};
+
+	TestWorld base;
+	TestWorld same;
+	TestWorld otherOrder;
+	TestWorld otherParent;
+	TestWorld otherIdentity;
+	const uint64_t hash = build(base, UUID(), true);
+	CHECK(build(same, UUID(), true) == hash);
+	CHECK(build(otherOrder, UUID(), false) != hash); // the order of A's children is hashed
+	CHECK(build(otherParent, UUID(3), true) != hash);
+	{
+		World& world = *otherIdentity.Scene;
+		Entity a = world.CreateEntityWithUUID(UUID(1), "A");
+		Entity b = world.CreateEntityWithUUID(UUID(2), "B");
+		Entity c = world.CreateEntityWithUUID(UUID(4), "C"); // another identity
+		REQUIRE(world.SetParent(b, a).HasValue());
+		REQUIRE(world.SetParent(c, a).HasValue());
+		CHECK(world.ComputeStateHash() != hash);
+	}
 }

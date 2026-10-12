@@ -150,9 +150,10 @@ namespace Gambit
 		void Tick(TimeStep timeStep, SimulationMode mode = SimulationMode::Play);
 
 		// The state hash (D-013): every hashed field of every component of every entity (entities by UUID, components
-		// by name, fields in declaration order; floating point by bit pattern), plus the random generator state, the
-		// tick, the simulated time and the events of both buffers (D-017). Equal for worlds that hold the same state,
-		// whatever the order in which unrelated entities were created or event types were first used.
+		// by name, fields in declaration order; floating point by bit pattern; Derived components are left out, even
+		// their presence), plus the random generator state, the tick, the simulated time and the events of both buffers
+		// (D-017). Equal for worlds that hold the same state, whatever the order in which unrelated entities were
+		// created or event types were first used.
 		[[nodiscard]] uint64_t ComputeStateHash() const;
 
 		[[nodiscard]] entt::registry& GetRegistry() noexcept { return m_Registry; }

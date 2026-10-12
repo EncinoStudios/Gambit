@@ -22,11 +22,31 @@ Gambit is strict ECS (D-020): **components are plain data, systems hold all logi
    ```
    Field types: `bool`, `int32_t`, `uint32_t`, `int64_t`, `uint64_t`, `float`, `double`, `glm::vec2/3/4`
    (`Attr::Color` for colors), `glm::quat`, `std::string`, `UUID` (entity reference; `Attr::AssetType{ "Texture" }`
-   for asset handles), registered enums, and `std::vector` of those (not enums). Other attributes: `Hidden`,
-   `ReadOnly`, `NotSerialized`, `NotHashed` (derived data only), `Category`. Component flags (`Serializable`,
-   `EditorVisible`, `Removable`, `Internal`) default to the first three.
+   for asset handles, `Attr::PlainUUID` for an identifier that refers to nothing), registered enums, registered structs
+   (see below), and `std::vector` of those (not enums). Other attributes: `Hidden`, `ReadOnly` (tools do not offer
+   edits; code may write), `NotSerialized`, `NotHashed` (derived data only), `Category`. Component flags
+   (`Serializable`, `EditorVisible`, `Removable`, `Internal`, `Derived`) default to the first three: `Internal` means
+   the engine owns the invariants (identity, hierarchy, inactive state) and generic access never writes, adds, copies
+   or removes it; `Derived` means a system recomputes it, so it is neither hashed (not even its presence) nor stored.
 3. That is all: serialization, inspector, Lua, CLI, `World::Copy` and the state hash work from the registration.
    Never hand-write per-component serializers. Add a test that sets each field through reflection.
+
+### Structs
+
+Nested data (animator layers, particle modules, materials) is a reflected struct: a plain class registered once, before
+the types that use it, with the same `Field` calls as a component. A field of that type, or a `std::vector` of it,
+becomes a `Struct` (array of `Struct`) field whose value is a `StructValue`, one value per struct field, recursively.
+Serialization, hashing, copying and the tools treat it like any other field; `StructInfo` gives the names and types.
+```cpp
+registry.RegisterStruct<AnimLayer>("AnimLayer")             // before AnimatorComponent
+    .Field("Clip", &AnimLayer::Clip, Attr::AssetType{ "AnimationClip" })
+    .Field("Weight", &AnimLayer::Weight, Attr::Range{ 0.0, 1.0 });
+registry.RegisterComponent<AnimatorComponent>("Animator")
+    .Field("Layers", &AnimatorComponent::Layers);            // std::vector<AnimLayer>
+```
+Members of the struct that are not registered are not part of its value: writing a value keeps them (new elements of
+an array start with their defaults). Script components can declare struct fields too (`FieldType::Struct` with the
+`StructInfo` in the field's attributes).
 
 Script components (D-023) are registered at runtime with `TypeRegistry::RegisterDynamicComponent(schema)` and stored
 as `DynamicComponent`; tools treat them exactly like C++ components through `ComponentInfo`.
@@ -65,3 +85,8 @@ Phases run in the order of D-024 (`Input` ... `Transform`, `PreRender`). `RunsIn
   (every system sees each event once, whatever its phase), `ViewCurrent()` this tick's so far. Events are copied and
   hashed, so each type needs `void HashEvent(Hasher&, const T&)` next to it (`HashEventFields(hasher, e.A, e.B)`).
 - Every simulation change needs a determinism test: run two worlds with the same seed and compare state hashes.
+- Spawn entities from data (prefabs, snapshots) with `UUIDMode::FromWorld` (`PrefabUtils::Instantiate` does): the new
+  UUIDs come from the world RNG. `UUIDMode::Random` (`UUID::Generate`) is for editors and tools only. A scene file stores
+  the seed, not the RNG position, tick or time: loading it gives an initial state (see `docs/guides/FileFormats.md`).
+- Generic reflection never writes `Internal` components: change identity and hierarchy with `World` calls, and spawn,
+  copy or snapshot entities with `SpawnEntities`, `CaptureSubtree` and `PrefabUtils`.

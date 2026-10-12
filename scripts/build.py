@@ -17,6 +17,9 @@ import sys
 
 import _common as common
 
+ERROR_LIMIT = 60  # distinct compiler errors printed when a build fails
+ERROR_WIDTH = 300
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -64,6 +67,21 @@ def failure_excerpt(lines: list[str]) -> list[str]:
     return lines[-40:]
 
 
+def report_failure(config: str, log_path, lines: list[str]) -> None:
+    """Prints why a build failed: the distinct compiler errors (file:line), else the log from the first failed step."""
+    failed_steps = sum(1 for line in lines if line.startswith("FAILED:"))
+    errors, total = common.extract_compiler_errors(lines, ERROR_LIMIT)
+    steps = f", {failed_steps} step(s) failed" if failed_steps else ""
+    print(f"build: FAILED {config}{steps} (log: {common.relative(log_path)})", file=sys.stderr)
+    if not errors:
+        common.print_excerpt(failure_excerpt(lines))
+        return
+    for error in errors:
+        print(error if len(error) <= ERROR_WIDTH else error[:ERROR_WIDTH] + " ...", file=sys.stderr)
+    if total > len(errors):
+        print(f"... ({total - len(errors)} more distinct errors in the log)", file=sys.stderr)
+
+
 def main() -> int:
     arguments = parse_arguments()
     config = arguments.config
@@ -103,12 +121,14 @@ def main() -> int:
     command = ["cmake", "--build", str(directory), "--parallel", str(jobs)]
     for target in arguments.target:
         command += ["--target", target]
+    # Ninja stops after the first failed step by default; "-k 0" builds everything that can still be built, so one run
+    # (a CI step log) shows every failing translation unit instead of one per attempt.
+    command += ["--", "-k", "0"]
 
     result = common.run_logged(command, log_path, env=env)
     lines = common.read_log(log_path)
     if result != 0:
-        print(f"build: FAILED {config} (log: {common.relative(log_path)})", file=sys.stderr)
-        common.print_excerpt(failure_excerpt(lines))
+        report_failure(config, log_path, lines)
         return 1
 
     link_compile_commands(config)

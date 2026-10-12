@@ -16,9 +16,9 @@ registration, one test. Nothing else is per-component. Background: `docs/guides/
 - Public PascalCase fields with default member initializers; no virtual functions, no logic beyond trivial accessors
   (like `TransformComponent::GetMatrix`). Must be default-constructible and copyable.
 - Field types: `bool`, `int32_t`, `uint32_t`, `int64_t`, `uint64_t`, `float`, `double`, `glm::vec2/3/4`, `glm::quat`,
-  `std::string`, `UUID`, a registered enum, or `std::vector` of any of these except enums. No raw pointers, no
-  `entt::entity` (store the target's `UUID`), no other types: extend `FieldType` (+ JSON, Lua, hashing) first if a
-  type is truly missing.
+  `std::string`, `UUID`, a registered enum, a registered struct (nested data, see below), or `std::vector` of any of
+  these except enums. No raw pointers, no `entt::entity` (store the target's `UUID`), no other types: extend
+  `FieldType` (+ JSON, Lua, hashing) first if a type is truly missing.
 - Derived/cached data that systems recompute: mark `Attr::NotHashed{}` and `Attr::NotSerialized{}`. Runtime state
   that matters for determinism stays hashed even when it is not serialized.
 
@@ -35,12 +35,20 @@ registry.RegisterComponent<RigidBodyComponent>("RigidBody")  // flags default to
     .Field("Type", &RigidBodyComponent::Type)
     .Field("Mass", &RigidBodyComponent::Mass, Attr::Range{ 0.0, 10000.0 }, Attr::Tooltip{ "0 = from density" })
     .Field("Tint", &RigidBodyComponent::Tint, Attr::Color{})                 // glm::vec3/vec4 -> Color3/Color4
-    .Field("Mesh", &RigidBodyComponent::Mesh, Attr::AssetType{ "Mesh" })    // UUID -> AssetHandle
+    .Field("Mesh", &RigidBodyComponent::Mesh, Attr::AssetType{ "Mesh" })    // UUID -> AssetHandle (a known AssetType)
+    .Field("Anchor", &RigidBodyComponent::Anchor)                           // UUID -> reference to an entity
+    .Field("Slot", &RigidBodyComponent::Slot, Attr::PlainUUID{})            // UUID -> an identifier, never remapped
     .Field("Velocity", &RigidBodyComponent::Velocity, Attr::NotSerialized{}, Attr::ReadOnly{});
 ```
 
 - Fields are reflected in call order (that is also the file and hash order): append new fields at the end.
-- Engine-managed components (derived state, identity) get `ComponentFlags::Internal`; tags (empty structs) work as is.
+- Engine-managed components (identity, hierarchy, inactive state) get `ComponentFlags::Internal`: generic access never
+  adds, removes, copies or writes them and files do not store them. Components that a system recomputes every tick get
+  `Internal | Derived` (or `Derived`): they are left out of files and of the state hash, presence included. Tags (empty
+  structs) work as is.
+- Nested data is a struct: `registry.RegisterStruct<Layer>("Layer").Field(...)` before the components that use it, then
+  `Layer` and `std::vector<Layer>` fields work like any other (see `docs/guides/ECS.md`). Struct members that are not
+  registered are not saved, hashed or copied through reflection.
 - Registration mistakes (duplicate names, bad attributes, unregistered enums) fail a `GB_CORE_VERIFY` at startup.
 
 ## 3. Use it from systems
@@ -52,6 +60,8 @@ Structural changes during a system go through `world.GetCommandBuffer()`. Random
 
 In `GambitTests/src/<Module>/`, test case names `"<Module>: <behaviour>"`:
 - registration: `registry.FindComponent("RigidBody")`, field types, attributes, defaults;
+- files: a scene with the component saves and loads to the same bytes and the same state hash
+  (`SceneSerializer`, see `GambitTests/src/Serialization/SceneSerializerTests.cpp`);
 - every field round-trips through `FieldInfo::SetValue/GetValue` on a component added with `ComponentInfo::Add`;
 - if a system uses it: a determinism test (two worlds, same seed, equal `ComputeStateHash()` every tick) and a
   `World::Copy` mid-run that continues identically.

@@ -194,3 +194,10 @@ runtime, the server URL and the publisher public key. At runtime `RemoteMount` f
 content blocks over HTTP(S) (cpp-httplib; HTTPS when OpenSSL is available), verifies signatures/hashes, keeps
 content in memory only (optionally an encrypted on-disk cache), and re-checks the manifest version for live
 updates. `gambit serve` hosts packs for development.
+
+## Content & licensing
+
+**D-080 Third-party content.** Only CC0 or CC-BY 4.0 assets (HDRIs, models, fonts under OFL/Apache-2.0) may be
+committed. Each one is listed with source URL, author and license in `ATTRIBUTION.md` at the repo root. Prefer
+procedurally generated content (MeshFactory, generator scripts in `tools/`) for tests and demos; keep committed
+binaries small (≤ ~4 MB each, 1k HDRIs).

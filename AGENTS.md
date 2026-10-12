@@ -72,7 +72,7 @@ A module's public API is its headers; cross-module includes go through those, ne
 ## 4. Building & testing
 All scripts are quiet: they print errors and a summary only; full logs land in `build/logs/`.
 ```
-git submodule update --init --recursive        # first time
+git submodule update --init --recursive --depth 1   # first time
 python3 scripts/build.py [--config Debug|Release|Dist] [--target GambitTests]
 python3 scripts/test.py  [--filter "<doctest pattern>"] [--no-gpu]
 python3 scripts/format.py [--check]

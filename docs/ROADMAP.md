@@ -1,7 +1,7 @@
 # Gambit Roadmap
 
 Source requirements: `docs/REQUIREMENTS.md`. Design decisions: `docs/DECISIONS.md`.
-Each task has a brief in `docs/tasks/<ID>.md`. Status: `todo` · `wip` · `done` · `blocked`.
+Each task has a brief in `docs/tasks/<ID>.md` (demos T26–T30 share `docs/tasks/T26-T30.md`). Status: `todo` · `wip` · `done` · `blocked`.
 A task is `done` only when it builds warning-free, all tests pass, it passed code review and it is pushed.
 
 ## M0 — Bootstrap

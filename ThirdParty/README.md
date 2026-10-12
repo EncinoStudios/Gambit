@@ -53,3 +53,14 @@ the expected version, so an accidental submodule bump fails CI.
 - **Updating a dependency.** `git -C ThirdParty/<name> fetch --depth 1 origin tag <tag>`, check it out, stage the
   submodule, update the table above and the smoke test that pins its version, and add a DECISIONS entry if the
   change is more than a patch bump.
+
+## Source derived from other projects
+
+Besides the submodules, some engine source files are ports of permissively licensed code. Their license notices are kept
+in the file headers.
+
+| Files | Origin | License |
+|---|---|---|
+| `Gambit/src/Gambit/Math/DMathTrig.cpp`, `DMathInverseTrig.cpp`, `DMathExpLog.cpp`, `DMathFmod.cpp`, `Internal/DMathExpLogTables.cpp` | musl libc 1.2.6 `src/math` (which derives from FreeBSD msun / Sun fdlibm, and from ARM's Optimized Routines for exp, log, log2 and pow) | MIT (musl), Sun fdlibm permission notice, MIT (ARM) |
+
+`Gambit::DMath` (D-011) is the only user: the ports exist because simulation code must not call the platform libm.

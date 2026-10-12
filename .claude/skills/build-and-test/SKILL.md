@@ -22,6 +22,8 @@ python3 scripts/check.py                     # format check + build + tests: req
 Useful options: `--config Debug|Release|Dist`, `--target GambitTests` (build one target), `--jobs N` (the build
 defaults to all cores; use `--jobs 4` or `GB_JOBS=4` on small machines), `--filter "Log: *"` and `--no-gpu` (tests),
 `--check` (format only verifies), `--skip-format` (`check.py`, for CI jobs without clang-format 18).
+`-D VAR=VALUE` passes a CMake cache entry to `build.py` / `check.py` (for example `-D GB_USE_PCH=OFF`, which CI uses so
+that ccache hits; changing it recreates the build directory).
 
 Choose the compiler with environment variables; the script recreates the build directory when it changes:
 
@@ -57,6 +59,9 @@ A failure prints the relevant excerpt plus the log path. `check.py` stops at the
 
 ## Other notes
 
+- Window tests (doctest suite `window`) need a display. On a headless Linux box `scripts/test.py` wraps the run in
+  `xvfb-run -a` when it is installed (`apt install xvfb`); without it those tests return early without testing.
+  `build/<config>/bin/GambitRuntime --headless --frames 10` runs the application loop without a window.
 - Build directories: `build/<Config>`; binaries in `build/<Config>/bin` (`gambit`, `GambitTests`, ...).
 - The Dist configuration compiles out `GB_ASSERT` and skips the editor; run `python3 scripts/check.py --config Dist`
   after touching asserts or editor-only code.

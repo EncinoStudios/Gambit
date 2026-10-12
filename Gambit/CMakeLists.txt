@@ -10,7 +10,9 @@ add_library(Gambit::Gambit ALIAS Gambit)
 gambit_configure_target(Gambit)
 
 target_include_directories(Gambit PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_precompile_headers(Gambit PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/gbpch.h")
+if(GB_USE_PCH)
+    target_precompile_headers(Gambit PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/gbpch.h")
+endif()
 
 # Configuration and platform definitions are PUBLIC so that every consumer of the engine headers agrees on them.
 target_compile_definitions(Gambit PUBLIC
@@ -20,7 +22,16 @@ target_compile_definitions(Gambit PUBLIC
     $<$<PLATFORM_ID:Windows>:NOMINMAX>
     $<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>)
 
+# glm is configured once, here, so that every consumer of Math/Math.h agrees (an ODR hazard otherwise). SIMD
+# intrinsics (GLM_FORCE_INTRINSICS) are deliberately not enabled: simulation code must compile to the same
+# floating-point operations on every platform (D-011).
+target_compile_definitions(Gambit PUBLIC
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_RADIANS
+    GLM_ENABLE_EXPERIMENTAL)
+
 find_package(Threads REQUIRED)
-target_link_libraries(Gambit PUBLIC Threads::Threads)
+target_link_libraries(Gambit PUBLIC Threads::Threads glm::glm)
+target_link_libraries(Gambit PRIVATE xxhash::xxhash nlohmann_json::nlohmann_json glfw::glfw)
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${GB_ENGINE_SOURCES})

@@ -78,13 +78,20 @@ python3 scripts/test.py  [--filter "<doctest pattern>"] [--no-gpu]
 python3 scripts/format.py [--check]
 python3 scripts/check.py                       # format check + build + all tests (run before commit)
 ```
+- CMake options (pass with `build.py -D VAR=VALUE` or `check.py -D VAR=VALUE`): `GB_USE_PCH` (default ON) uses the
+  precompiled header `gbpch.h` for the engine; CI turns it OFF because GCC precompiled headers are not byte-reproducible,
+  so ccache would miss on fresh build directories. `GB_USE_CCACHE`, `GB_WARNINGS_AS_ERRORS` and `GB_BUILD_*` are described
+  in the root `CMakeLists.txt`.
 - Build dir: `build/<config>` (Ninja, ccache when present). Linux needs `libx11-dev libxrandr-dev
   libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev`; GPU tests need a Vulkan ICD
   (Mesa lavapipe works headless). Windows/macOS: Visual Studio 2022 / Xcode 15 + Python 3; macOS needs MoltenVK.
 - Tests: doctest, one executable `GambitTests`. Name test cases `"<Module>: <behaviour>"`; GPU tests add
-  `* doctest::test_suite("gpu")`. Keep unit tests fast (<100 ms each); heavier integration tests go in suite
-  `"slow"`. Golden images live in `GambitTests/Golden/`; regenerate only intentionally with
-  `GB_UPDATE_GOLDEN=1` and say so in the commit message.
+  `* doctest::test_suite("gpu")`; tests that open windows add `* doctest::test_suite("window")` and return early (passing)
+  when no window can be opened. `scripts/test.py` runs the tests under `xvfb-run` on Linux when there is no display and
+  `xvfb` is installed (CI installs it), so the window suite really runs there. Keep unit tests fast (<100 ms each);
+  heavier integration tests go in suite `"slow"`. Golden images live in `GambitTests/Golden/`; they and other checked-in
+  reference data (the DMath table, D-015) are regenerated only intentionally with `GB_UPDATE_GOLDEN=1`; say so in the
+  commit message.
 - Lua game tests: `build/<config>/bin/gambit test --project Projects/FeatureTest`.
 
 ## 5. Definition of done (every change)

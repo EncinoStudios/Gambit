@@ -10,8 +10,8 @@ A task is `done` only when it builds warning-free, all tests pass, it passed cod
 | T01 | Repo skeleton, CMake, ThirdParty submodules, quiet scripts, Core basics, test exe, CI | done |
 
 ## M1 — Core runtime & determinism
-| T02 | Core: VFS, FileSystem, Buffer, UUID, Timer, Log sinks, Random (PCG32), DMath, hashing | todo |
-| T03 | Platform: Application loop, Window (GLFW), Input devices, InputFrame/InputActions/InputLog | todo |
+| T02 | Core: VFS, FileSystem, Buffer, UUID, Timer, Log sinks, Random (PCG32), DMath, hashing | done |
+| T03 | Platform: Application loop, Window (GLFW), Input devices, InputFrame/InputActions/InputLog | done |
 
 ## M2 — ECS, reflection, serialization, automation core
 | T04 | TypeRegistry reflection, World/Entity on EnTT, core components, system scheduler, command buffer, state hash | todo |

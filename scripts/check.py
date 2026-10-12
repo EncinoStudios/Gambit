@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Runs everything required before a commit: format check, build, all tests. Quiet; stops at the first failure.
 
-    python3 scripts/check.py [--config Debug] [--jobs N] [--no-gpu] [--skip-format]
+    python3 scripts/check.py [--config Debug] [--jobs N] [--no-gpu] [--skip-format] [-D VAR=VALUE]
 
 --skip-format exists for CI jobs on platforms where the reference clang-format is not installed; the Linux job
-always checks formatting.
+always checks formatting. -D passes a CMake cache entry to the build (CI uses -D GB_USE_PCH=OFF so that ccache hits).
 """
 
 from __future__ import annotations
@@ -30,11 +30,15 @@ def main() -> int:
     parser.add_argument("-j", "--jobs", type=int, default=0, metavar="N", help="parallel build jobs")
     parser.add_argument("--no-gpu", action="store_true", help="skip tests in the 'gpu' suite")
     parser.add_argument("--skip-format", action="store_true", help="do not run the clang-format check")
+    parser.add_argument("-D", dest="definitions", action="append", default=[], metavar="VAR=VALUE",
+                        help="extra CMake cache entry for the build (repeatable)")
     arguments = parser.parse_args()
 
     stopwatch = common.Stopwatch()
     config = ["--config", arguments.config]
     build = config + (["--jobs", str(arguments.jobs)] if arguments.jobs else [])
+    for definition in arguments.definitions:
+        build += ["-D", definition]
     test = config + (["--no-gpu"] if arguments.no_gpu else [])
 
     steps = []

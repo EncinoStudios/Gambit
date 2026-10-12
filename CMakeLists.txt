@@ -41,6 +41,7 @@ option(GB_BUILD_CLI "Build the gambit command-line tool" ON)
 option(GB_BUILD_TESTS "Build GambitTests and register it with CTest" ON)
 option(GB_WARNINGS_AS_ERRORS "Treat warnings in first-party code as errors (D-001, always ON in CI)" ON)
 option(GB_USE_CCACHE "Use ccache as compiler launcher when it is installed" ON)
+option(GB_USE_PCH "Use a precompiled header for the engine library (CI turns it off so ccache hits)" ON)
 
 include(GambitConfigurations)
 include(GambitCompilerOptions)

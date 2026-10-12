@@ -1,14 +1,18 @@
 #pragma once
 
-// Precompiled header of the engine library. Every engine .cpp includes it first. Keep it to standard headers
-// and the most widely used Core headers; anything volatile here recompiles the whole engine.
+// Precompiled header of the engine library. Every engine .cpp includes it first (it is also force-included when
+// GB_USE_PCH is ON). Keep it to standard headers, glm and the most widely used, stable Core headers; anything
+// volatile here recompiles the whole engine.
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -28,3 +32,4 @@
 #include "Gambit/Core/Base.h"
 #include "Gambit/Core/Log.h"
 #include "Gambit/Core/Result.h"
+#include "Gambit/Math/Math.h"

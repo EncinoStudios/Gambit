@@ -9,6 +9,8 @@ endif()
 add_executable(GambitTests ${GB_TEST_SOURCES})
 gambit_configure_target(GambitTests)
 target_include_directories(GambitTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# Tests that regenerate checked-in reference data (GB_UPDATE_GOLDEN=1) write into the source tree.
+target_compile_definitions(GambitTests PRIVATE GB_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(GambitTests PRIVATE
     Gambit::Gambit
     doctest::doctest

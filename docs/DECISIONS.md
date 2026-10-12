@@ -34,7 +34,7 @@ MIT/BSD/zlib/Apache-2.0/CC0/Unlicense/public domain or similarly permissive).
 + review. Namespace `Gambit`, macros prefixed `GB_`, precompiled header `gbpch.h`.
 
 **D-005 Testing.** doctest. `GambitTests` executable registered with CTest. Every engine feature needs unit
-tests; GPU tests run on any Vulkan device (lavapipe in CI/headless) and are tagged `[gpu]` so they can be
+tests; GPU tests run on any Vulkan device (lavapipe in CI/headless) and are in the doctest test suite `gpu` so they can be
 skipped with `GB_TEST_NO_GPU=1`. Golden-image tests compare with per-pixel tolerance. Game-level behaviour
 tests are written in Lua inside projects (D-041) and run with `gambit test`.
 

@@ -7,7 +7,7 @@ A task is `done` only when it builds warning-free, all tests pass, it passed cod
 ## M0 — Bootstrap
 | ID | Task | Status |
 |----|------|--------|
-| T01 | Repo skeleton, CMake, ThirdParty submodules, quiet scripts, Core basics, test exe, CI | todo |
+| T01 | Repo skeleton, CMake, ThirdParty submodules, quiet scripts, Core basics, test exe, CI | done |
 
 ## M1 — Core runtime & determinism
 | T02 | Core: VFS, FileSystem, Buffer, UUID, Timer, Log sinks, Random (PCG32), DMath, hashing | todo |

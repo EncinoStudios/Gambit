@@ -1,0 +1,93 @@
+[submodule "ThirdParty/ImGuizmo"]
+	path = ThirdParty/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo
+	shallow = true
+	branch = master
+[submodule "ThirdParty/JoltPhysics"]
+	path = ThirdParty/JoltPhysics
+	url = https://github.com/jrouwe/JoltPhysics
+	shallow = true
+[submodule "ThirdParty/Monocypher"]
+	path = ThirdParty/Monocypher
+	url = https://github.com/loupvaillant/Monocypher
+	shallow = true
+[submodule "ThirdParty/Vulkan-Headers"]
+	path = ThirdParty/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers
+	shallow = true
+[submodule "ThirdParty/cgltf"]
+	path = ThirdParty/cgltf
+	url = https://github.com/jkuhlmann/cgltf
+	shallow = true
+[submodule "ThirdParty/cpp-httplib"]
+	path = ThirdParty/cpp-httplib
+	url = https://github.com/yhirose/cpp-httplib
+	shallow = true
+[submodule "ThirdParty/doctest"]
+	path = ThirdParty/doctest
+	url = https://github.com/doctest/doctest
+	shallow = true
+[submodule "ThirdParty/earcut.hpp"]
+	path = ThirdParty/earcut.hpp
+	url = https://github.com/mapbox/earcut.hpp
+	shallow = true
+[submodule "ThirdParty/entt"]
+	path = ThirdParty/entt
+	url = https://github.com/skypjack/entt
+	shallow = true
+[submodule "ThirdParty/glfw"]
+	path = ThirdParty/glfw
+	url = https://github.com/glfw/glfw
+	shallow = true
+[submodule "ThirdParty/glm"]
+	path = ThirdParty/glm
+	url = https://github.com/g-truc/glm
+	shallow = true
+[submodule "ThirdParty/glslang"]
+	path = ThirdParty/glslang
+	url = https://github.com/KhronosGroup/glslang
+	shallow = true
+[submodule "ThirdParty/imgui"]
+	path = ThirdParty/imgui
+	url = https://github.com/ocornut/imgui
+	shallow = true
+	branch = docking
+[submodule "ThirdParty/lua"]
+	path = ThirdParty/lua
+	url = https://github.com/lua/lua
+	shallow = true
+[submodule "ThirdParty/lz4"]
+	path = ThirdParty/lz4
+	url = https://github.com/lz4/lz4
+	shallow = true
+[submodule "ThirdParty/miniaudio"]
+	path = ThirdParty/miniaudio
+	url = https://github.com/mackron/miniaudio
+	shallow = true
+[submodule "ThirdParty/nanosvg"]
+	path = ThirdParty/nanosvg
+	url = https://github.com/memononen/nanosvg
+	shallow = true
+	branch = master
+[submodule "ThirdParty/nlohmann_json"]
+	path = ThirdParty/nlohmann_json
+	url = https://github.com/nlohmann/json
+	shallow = true
+[submodule "ThirdParty/nvrhi"]
+	path = ThirdParty/nvrhi
+	url = https://github.com/NVIDIAGameWorks/nvrhi
+	shallow = true
+	branch = main
+[submodule "ThirdParty/sol2"]
+	path = ThirdParty/sol2
+	url = https://github.com/ThePhD/sol2
+	shallow = true
+[submodule "ThirdParty/stb"]
+	path = ThirdParty/stb
+	url = https://github.com/nothings/stb
+	shallow = true
+	branch = master
+[submodule "ThirdParty/xxHash"]
+	path = ThirdParty/xxHash
+	url = https://github.com/Cyan4973/xxHash
+	shallow = true

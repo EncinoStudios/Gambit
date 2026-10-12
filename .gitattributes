@@ -1,0 +1,20 @@
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.hdr binary
+*.exr binary
+*.glb binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.ttf binary
+*.otf binary
+*.ktx2 binary
+*.gpak binary
+
+# Windows batch files need CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf

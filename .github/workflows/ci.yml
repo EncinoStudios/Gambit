@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.compiler }} ${{ matrix.config }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Formatting is checked once, by the reference clang-format 18, in the first job.
+          - { compiler: GCC, cc: gcc-13, cxx: g++-13, config: Debug, format: true }
+          - { compiler: GCC, cc: gcc-13, cxx: g++-13, config: Release, format: false }
+          - { compiler: GCC, cc: gcc-13, cxx: g++-13, config: Dist, format: false }
+          - { compiler: Clang, cc: clang-18, cxx: clang++-18, config: Debug, format: false }
+          - { compiler: Clang, cc: clang-18, cxx: clang++-18, config: Release, format: false }
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build ccache clang-18 clang-format-18 \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev \
+            mesa-vulkan-drivers vulkan-tools
+
+      - name: Select the lavapipe Vulkan driver
+        run: |
+          icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)"
+          echo "VK_DRIVER_FILES=${icd}" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=${icd}" >> "$GITHUB_ENV"
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-${{ matrix.compiler }}-${{ matrix.config }}
+
+      - name: Check (format, build, tests incl. GPU on lavapipe)
+        run: |
+          args="--config ${{ matrix.config }}"
+          if [ "${{ matrix.format }}" != "true" ]; then args="$args --skip-format"; fi
+          python3 scripts/check.py $args
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-linux-${{ matrix.compiler }}-${{ matrix.config }}
+          path: build/logs/
+
+  windows:
+    name: Windows MSVC Debug
+    runs-on: windows-2022
+    # With Ninja, CMake takes the first compiler on PATH; the runner image also ships MinGW and Strawberry Perl g++.
+    env:
+      CC: cl
+      CXX: cl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja
+        run: python -m pip install ninja
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: windows-msvc-debug
+
+      - name: Check (build, tests; no GPU)
+        run: python scripts/check.py --skip-format --no-gpu
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-windows
+          path: build/logs/
+
+  macos:
+    name: macOS AppleClang Debug
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-appleclang-debug
+
+      - name: Check (build, tests; no GPU)
+        run: python3 scripts/check.py --skip-format --no-gpu
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-macos
+          path: build/logs/

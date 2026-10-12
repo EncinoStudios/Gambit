@@ -1,0 +1,382 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "GB_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "os-linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "os-windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "os-macos",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3"
+      }
+    },
+    {
+      "name": "config-debug",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "config-release",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "config-dist",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/Dist",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Dist"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "inherits": [
+        "base",
+        "os-linux",
+        "config-debug"
+      ]
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "inherits": [
+        "base",
+        "os-linux",
+        "config-release"
+      ]
+    },
+    {
+      "name": "linux-dist",
+      "displayName": "Linux Dist",
+      "inherits": [
+        "base",
+        "os-linux",
+        "config-dist"
+      ]
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "inherits": [
+        "base",
+        "os-windows",
+        "config-debug"
+      ]
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "inherits": [
+        "base",
+        "os-windows",
+        "config-release"
+      ]
+    },
+    {
+      "name": "windows-dist",
+      "displayName": "Windows Dist",
+      "inherits": [
+        "base",
+        "os-windows",
+        "config-dist"
+      ]
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "Macos Debug",
+      "inherits": [
+        "base",
+        "os-macos",
+        "config-debug"
+      ]
+    },
+    {
+      "name": "macos-release",
+      "displayName": "Macos Release",
+      "inherits": [
+        "base",
+        "os-macos",
+        "config-release"
+      ]
+    },
+    {
+      "name": "macos-dist",
+      "displayName": "Macos Dist",
+      "inherits": [
+        "base",
+        "os-macos",
+        "config-dist"
+      ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "os-linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "os-windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "os-macos",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "configurePreset": "linux-debug",
+      "inherits": [
+        "os-linux"
+      ]
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "configurePreset": "linux-release",
+      "inherits": [
+        "os-linux"
+      ]
+    },
+    {
+      "name": "linux-dist",
+      "displayName": "Linux Dist",
+      "configurePreset": "linux-dist",
+      "inherits": [
+        "os-linux"
+      ]
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "configurePreset": "windows-debug",
+      "inherits": [
+        "os-windows"
+      ]
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "configurePreset": "windows-release",
+      "inherits": [
+        "os-windows"
+      ]
+    },
+    {
+      "name": "windows-dist",
+      "displayName": "Windows Dist",
+      "configurePreset": "windows-dist",
+      "inherits": [
+        "os-windows"
+      ]
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "Macos Debug",
+      "configurePreset": "macos-debug",
+      "inherits": [
+        "os-macos"
+      ]
+    },
+    {
+      "name": "macos-release",
+      "displayName": "Macos Release",
+      "configurePreset": "macos-release",
+      "inherits": [
+        "os-macos"
+      ]
+    },
+    {
+      "name": "macos-dist",
+      "displayName": "Macos Dist",
+      "configurePreset": "macos-dist",
+      "inherits": [
+        "os-macos"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "os-linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "os-windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "os-macos",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "configurePreset": "linux-debug",
+      "inherits": [
+        "os-linux"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "configurePreset": "linux-release",
+      "inherits": [
+        "os-linux"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-dist",
+      "displayName": "Linux Dist",
+      "configurePreset": "linux-dist",
+      "inherits": [
+        "os-linux"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "configurePreset": "windows-debug",
+      "inherits": [
+        "os-windows"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "configurePreset": "windows-release",
+      "inherits": [
+        "os-windows"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-dist",
+      "displayName": "Windows Dist",
+      "configurePreset": "windows-dist",
+      "inherits": [
+        "os-windows"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "Macos Debug",
+      "configurePreset": "macos-debug",
+      "inherits": [
+        "os-macos"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "Macos Release",
+      "configurePreset": "macos-release",
+      "inherits": [
+        "os-macos"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-dist",
+      "displayName": "Macos Dist",
+      "configurePreset": "macos-dist",
+      "inherits": [
+        "os-macos"
+      ],
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

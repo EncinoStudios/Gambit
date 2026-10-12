@@ -1,0 +1,72 @@
+# Encodes AGENTS.md section 2 (Hazel style, D-004). Reference version: clang-format 18.
+Language: Cpp
+Standard: c++20
+BasedOnStyle: LLVM
+
+# Tabs (width 4), ~120 columns, Allman braces, contents of namespaces indented.
+UseTab: AlignWithSpaces
+TabWidth: 4
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 120
+AlignAfterOpenBracket: AlwaysBreak
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+NamespaceIndentation: All
+FixNamespaceComments: false
+AccessModifierOffset: -4
+IndentCaseLabels: true
+IndentPPDirectives: AfterHash
+IndentWrappedFunctionNames: false
+
+# `Type* ptr`, `Type& ref`.
+PointerAlignment: Left
+DerivePointerAlignment: false
+ReferenceAlignment: Pointer
+
+# `glm::vec3 Translation{ 0.0f };`
+Cpp11BracedListStyle: false
+
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortEnumsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+AlignOperands: DontAlign
+BinPackArguments: true
+BinPackParameters: true
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: NextLineOnly
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeTernaryOperators: true
+SpaceAfterTemplateKeyword: false
+SpacesInContainerLiterals: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+EmptyLineBeforeAccessModifier: LogicalBlock
+SeparateDefinitionBlocks: Leave
+
+# Include order (AGENTS.md section 2) is expressed by blank-line separated blocks:
+# gbpch.h, own header, Gambit headers, third-party, standard library. Blocks are preserved and sorted inside.
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive

@@ -1,0 +1,25 @@
+# Build output and tool caches
+/build/
+/out/
+/.cache/
+/compile_commands.json
+CMakeUserPresets.json
+
+# IDE / editor state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Local agent settings
+.claude/settings.local.json
+
+# Logs
+*.log

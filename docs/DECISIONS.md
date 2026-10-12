@@ -201,3 +201,12 @@ updates. `gambit serve` hosts packs for development.
 committed. Each one is listed with source URL, author and license in `ATTRIBUTION.md` at the repo root. Prefer
 procedurally generated content (MeshFactory, generator scripts in `tools/`) for tests and demos; keep committed
 binaries small (≤ ~4 MB each, 1k HDRIs).
+
+## Addenda (from implementation)
+
+**D-015 DMath = musl port.** `Gambit::DMath` is a bit-exact port of musl libm 1.2.6 (MIT); NaN results are
+canonicalized. Reference outputs live in `GambitTests/.../DMathReference.inl` (regenerate only with
+`GB_UPDATE_GOLDEN=1` and a justification in the commit message).
+
+**D-016 Input binding resolution.** When several bindings feed one action, the binding with the largest
+magnitude wins (no summing); `InputActions.json` rejects unknown properties (strict, agent-friendly errors).

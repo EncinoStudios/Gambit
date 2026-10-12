@@ -38,7 +38,10 @@ struct std::formatter<Unformattable>
 {
 	constexpr auto parse(std::format_parse_context& context) { return context.begin(); }
 
-	auto format(const Unformattable&, std::format_context&) const -> std::format_context::iterator
+	// Templated on the context because the standard lets an implementation pick the output iterator; libc++ checks
+	// formattability with its own, so a formatter hard-wired to std::format_context is rejected there.
+	template<typename FormatContext>
+	auto format(const Unformattable&, FormatContext&) const -> typename FormatContext::iterator
 	{
 		throw std::runtime_error("cannot format");
 	}

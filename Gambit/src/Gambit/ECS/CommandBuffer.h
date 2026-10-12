@@ -43,9 +43,10 @@ namespace Gambit
 		// Destroys the entity and its descendants.
 		void DestroyEntity(UUID entity);
 
-		// Adds the component, or replaces its value when the entity already has it.
+		// Adds the component, or replaces its value when the entity already has it. A tag (empty type) has no value to
+		// store, so `component` goes unused for it; the attribute keeps MSVC from reporting that (C4100).
 		template<typename T>
-		void AddComponent(UUID entity, T component = {})
+		void AddComponent(UUID entity, [[maybe_unused]] T component = {})
 		{
 			// Generic lambdas, so that Entity only needs to be complete where this template is instantiated.
 			if constexpr (std::is_empty_v<T>)

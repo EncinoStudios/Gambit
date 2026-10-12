@@ -1,0 +1,113 @@
+# AGENTS.md — Gambit Engine development guide
+
+Gambit is a production-grade, deterministic 3D game engine (C++20, CMake, NVRHI/Vulkan, EnTT, Jolt, Lua).
+This file is the contract for every contributor, human or AI. Read it fully before changing code.
+
+- Requirements: `docs/REQUIREMENTS.md` · Decisions (cite as `D-0xx`): `docs/DECISIONS.md`
+- Plan & status: `docs/ROADMAP.md` · Task briefs: `docs/tasks/`
+- Skills (step-by-step recipes): `.claude/skills/*/SKILL.md`
+
+## 1. Golden rules
+1. **No hacks, no shortcuts.** Production code only: handle errors, validate inputs at boundaries, no
+   `TODO`-stubs pretending to be features, no dead code, no commented-out code.
+2. **Every change is tested.** New behaviour ships with doctest unit tests (C++) and, for gameplay-facing
+   features, Lua tests in `Projects/FeatureTest`. Bug fixes ship with a regression test.
+3. **Determinism is a feature** (D-011). Simulation code: fixed timestep, `Gambit::Random` only,
+   `Gambit::DMath` instead of `std::sin/cos/...`, no wall clock, no pointer-keyed unordered iteration, no
+   threads except Jolt's job system. If you touch simulation, add/extend a determinism test.
+4. **Strict ECS** (D-020). Components = plain data. Systems = logic. Never put behaviour in components.
+5. **Reflection is the single source of truth** (D-022). New component → register it in the TypeRegistry;
+   serialization, inspector, Lua, CLI and hashing then work automatically. Do not hand-write per-component
+   serializers/inspectors unless a field type is genuinely new (then extend the generic system).
+6. **Everything an editor user can do, an agent can do** (D-051). New editor features expose a `Command`
+   in the `CommandRegistry` first; UI calls the command.
+7. **Build warning-free, format, test, review, then commit.** See §5.
+
+## 2. Style (Hazel conventions, D-004)
+| Item | Convention | Example |
+|---|---|---|
+| Namespaces | PascalCase, all engine code in `Gambit` | `namespace Gambit { ... }` (contents indented) |
+| Types, enums, enum values | PascalCase | `class AssetManager`, `enum class BlendMode { Override, Additive }` |
+| Functions & methods | PascalCase | `void OnUpdate(TimeStep ts);` |
+| Member variables | `m_` + PascalCase | `m_Registry` |
+| Static variables | `s_` + PascalCase | `s_Instance` |
+| Globals (avoid) | `g_` + PascalCase | `g_Allocations` |
+| Locals & parameters | camelCase | `float deltaTime` |
+| Public fields of plain structs/components | PascalCase, no prefix | `glm::vec3 Translation{ 0.0f };` |
+| Constants (`constexpr`) | PascalCase | `constexpr uint32_t MaxLights = 256;` |
+| Macros | `GB_` + UPPER_SNAKE | `GB_CORE_ASSERT(x, "msg")` |
+| Files | PascalCase matching the main type; `.h` / `.cpp` | `Renderer/SceneRenderer.h` |
+| Shaders | PascalCase `.glsl` with stage suffix | `PBR.vert.glsl`, `SSAO.comp.glsl` |
+
+Formatting (enforced by `.clang-format`, run `python scripts/format.py`):
+- Tabs for indentation (width 4), LF line endings, final newline, ~120 columns.
+- Allman braces (opening brace on its own line) for namespaces, types, functions and control blocks.
+- `Type* ptr`, `Type& ref` (symbol binds to type). `#pragma once` in every header.
+- Include order: `gbpch.h` first in engine `.cpp` files, then own header, then Gambit headers, then
+  third-party, then std. Use `"Gambit/Module/File.h"` paths from `Gambit/src`.
+- `Ref<T>` = `std::shared_ptr<T>`, `Scope<T>` = `std::unique_ptr<T>` with `CreateRef`/`CreateScope`.
+- Prefer `enum class`, `std::span`, `std::string_view` params, `[[nodiscard]]` on fallible returns.
+- Errors: functions that can fail at runtime return `Result<T>` / `bool` + log (no exceptions across module
+  boundaries; third-party exceptions (nlohmann, sol2) are caught at the boundary). Programmer errors use
+  `GB_CORE_ASSERT`. Never `abort()` on bad content — report and continue.
+- Comments explain *why*, not *what*. Public engine headers get a one-line doc comment per class.
+- No `using namespace` in headers. No raw `new/delete` outside allocators.
+
+## 3. Layout
+```
+Gambit/src/Gambit/{Core,Platform,Math,ECS,Reflection,Serialization,Asset,Renderer,RHI,Physics,
+                   Animation,Audio,Scripting,UI,Automation,Project,Content}/   engine modules
+Gambit/Shaders/            GLSL, compiled+embedded at build time (D-031)
+GambitEditor/src/          editor app + panels
+GambitRuntime/src/         shipping player
+GambitCLI/src/             `gambit` CLI + MCP server
+GambitTests/src/<Module>/  tests mirroring engine modules; GambitTests/Golden/ reference images
+Projects/FeatureTest/      exhaustive feature/API test project (Lua tests run in CI)
+Projects/<Demo>/           demo games (content only)
+ThirdParty/                pinned submodules — never edit vendored code; patch via CMake/wrappers
+```
+A module's public API is its headers; cross-module includes go through those, never into another module's
+`Internal/` folder.
+
+## 4. Building & testing
+All scripts are quiet: they print errors and a summary only; full logs land in `build/logs/`.
+```
+git submodule update --init --recursive        # first time
+python3 scripts/build.py [--config Debug|Release|Dist] [--target GambitTests]
+python3 scripts/test.py  [--filter "<doctest pattern>"] [--no-gpu]
+python3 scripts/format.py [--check]
+python3 scripts/check.py                       # format check + build + all tests (run before commit)
+```
+- Build dir: `build/<config>` (Ninja, ccache when present). Linux needs `libx11-dev libxrandr-dev
+  libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev`; GPU tests need a Vulkan ICD
+  (Mesa lavapipe works headless). Windows/macOS: Visual Studio 2022 / Xcode 15 + Python 3; macOS needs MoltenVK.
+- Tests: doctest, one executable `GambitTests`. Name test cases `"<Module>: <behaviour>"`; GPU tests add
+  `* doctest::test_suite("gpu")`. Keep unit tests fast (<100 ms each); heavier integration tests go in suite
+  `"slow"`. Golden images live in `GambitTests/Golden/`; regenerate only intentionally with
+  `GB_UPDATE_GOLDEN=1` and say so in the commit message.
+- Lua game tests: `build/<config>/bin/gambit test --project Projects/FeatureTest`.
+
+## 5. Definition of done (every change)
+1. Builds with zero warnings in Debug and Release (`GB_WARNINGS_AS_ERRORS=ON`).
+2. `python3 scripts/check.py` passes (format, build, all tests).
+3. New/changed behaviour has tests; public API changes are reflected in docs and Lua stubs.
+4. Self-review against the checklist in `.claude/skills/code-review/SKILL.md`, then an independent review.
+5. Commit message: imperative subject ≤ 72 chars, body explains what & why, cites task/decision IDs.
+
+## 6. Engine architecture in brief
+- **Simulation loop:** `Application` drives a fixed-step `Simulation` (D-011) and a variable-rate renderer
+  that interpolates. Systems run in phases (D-024) on the `World`.
+- **Data flow to rendering:** systems → `World` components → render extraction (`PreRender`) →
+  `RenderScene` → `SceneRenderer` passes (D-032). Renderer never reads the `World` directly.
+- **Assets:** referenced by `AssetHandle` (UUID); `.meta` sidecar files hold handle + import settings; all IO
+  via `VFS` (D-014).
+- **Scripting:** Lua declares components/systems/tests (D-041). Scripts are content, not engine code.
+- **Automation:** `CommandRegistry` is the API for editors, CLI, MCP and RPC (D-051).
+- **Comments:** agents leave notes for users/agents with `gambit comment add ...` (D-052). Use them for open
+  questions, follow-ups and review notes attached to entities, assets, files or features.
+
+## 7. Working as an agent
+- Stay within your task brief; report anything needing a design decision instead of guessing.
+- Never edit `ThirdParty/` contents, never rewrite git history, never commit build output.
+- Keep reports short; put long findings in files under `docs/` or the task brief.
+- When you find a problem outside your scope, leave a comment (D-052) or note it in your report.

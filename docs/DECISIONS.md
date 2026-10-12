@@ -210,3 +210,12 @@ canonicalized. Reference outputs live in `GambitTests/.../DMathReference.inl` (r
 
 **D-016 Input binding resolution.** When several bindings feed one action, the binding with the largest
 magnitude wins (no summing); `InputActions.json` rejects unknown properties (strict, agent-friendly errors).
+
+**D-017 World events are double-buffered.** At the start of tick N the event queues swap: `Events<T>().View()`
+returns the complete set emitted during tick N-1 (every system sees each event exactly once, independent of
+phase order); `ViewCurrent()` returns events emitted so far in tick N for same-tick consumers (e.g. PostPhysics
+reading collisions). Both buffers are part of `World::Copy` and of the state hash.
+
+**D-018 ECS details (T04).** Worlds hold a pointer to a `TypeRegistry` (global default; tests may use their
+own). `TransformComponent` is optional. Disabled entities carry a derived `InactiveComponent` that systems skip.
+Root ordering is preserved for authoring but not hashed. The state hash includes simulation time.

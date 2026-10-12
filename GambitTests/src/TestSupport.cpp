@@ -3,9 +3,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <string_view>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -24,6 +26,12 @@
 
 namespace Gambit::Tests
 {
+	bool IsEnvironmentFlagSet(const char* name)
+	{
+		const char* value = std::getenv(name);
+		return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+	}
+
 	LogConfig MakeTestLogConfig()
 	{
 		LogConfig config;

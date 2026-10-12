@@ -15,11 +15,11 @@ A task is `done` only when it builds warning-free, all tests pass, it passed cod
 
 ## M2 — ECS, reflection, serialization, automation core
 | T04 | TypeRegistry reflection, World/Entity on EnTT, core components, system scheduler, command buffer, state hash | done |
-| T05 | JSON scene/prefab serialization, Project files, AssetManager + .meta, DataTable (CSV) | todo |
+| T05 | JSON scene/prefab serialization, Project files, AssetManager + .meta, DataTable (CSV) | done |
 | T06 | CommandRegistry + EditorContext + undo/redo; `gambit` CLI skeleton; comments system | todo |
 
 ## M3–M4 — Rendering
-| T07 | GraphicsDevice (NVRHI/Vulkan windowed+headless), glslang shader pipeline, readback, first golden test | todo |
+| T07 | GraphicsDevice (NVRHI/Vulkan windowed+headless), glslang shader pipeline, readback, first golden test | done |
 | T08 | Mesh/Texture/Material assets, glTF import, forward PBR, camera, lights, debug lines | todo |
 | T09 | IBL (HDR→cube, irradiance, prefilter, BRDF LUT), skybox, HDR + tonemapping + bloom | todo |
 | T10 | Cascaded soft shadow maps (PCF/PCSS), SSAO (GTAO + bilateral blur) | todo |

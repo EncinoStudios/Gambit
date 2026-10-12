@@ -61,7 +61,11 @@ A failure prints the relevant excerpt plus the log path. `check.py` stops at the
 
 - Window tests (doctest suite `window`) need a display. On a headless Linux box `scripts/test.py` wraps the run in
   `xvfb-run -a` when it is installed (`apt install xvfb`); without it those tests return early without testing.
-  `build/<config>/bin/GambitRuntime --headless --frames 10` runs the application loop without a window.
+  `build/<config>/bin/GambitRuntime --headless --frames 10` runs the application loop without a window, rendering
+  offscreen; add `--no-gpu` to run without a graphics device.
+- GPU tests (doctest suite `gpu`) need a Vulkan 1.3 device; Mesa lavapipe works headless. They skip with a message when
+  there is none or `GB_TEST_NO_GPU=1` (`--no-gpu`). A validation error fails the test that caused it; the log shows it.
+  Failed golden-image comparisons leave the actual and diff images in `build/test-output/`.
 - Build directories: `build/<Config>`; binaries in `build/<Config>/bin` (`gambit`, `GambitTests`, ...).
 - The Dist configuration compiles out `GB_ASSERT` and skips the editor; run `python3 scripts/check.py --config Dist`
   after touching asserts or editor-only code.

@@ -12,6 +12,7 @@
 #include "Gambit/Input/InputSource.h"
 #include "Gambit/Input/InputState.h"
 #include "Gambit/Platform/Window.h"
+#include "Gambit/RHI/GraphicsDevice.h"
 
 #include <chrono>
 #include <cstdint>
@@ -49,10 +50,16 @@ namespace Gambit
 		uint32_t SimulationHz = 60;       // fixed simulation ticks per second (D-011)
 		uint32_t MaxSimStepsPerFrame = 8; // a longer frame is clamped to this many ticks (the rest is dropped)
 		uint64_t FrameLimit = 0;          // Run returns after this many frames; 0 runs until Close
+		// Creates a GraphicsDevice in Initialize: presenting to the window, or offscreen when Headless (the Headless,
+		// VSync and ApplicationName fields of Graphics are taken from this specification). Frames then render between
+		// the device's BeginFrame and Present.
+		bool EnableGraphics = false;
+		GraphicsDeviceSpecification Graphics;
 	};
 
 	// Applies the arguments every Gambit executable understands to `specification`: --headless, --frames N (sets
-	// FrameLimit) and --hz N (SimulationHz). Fails with a message for malformed values.
+	// FrameLimit), --hz N (SimulationHz) and --no-gpu (no graphics device, for machines without Vulkan and dedicated
+	// simulation runs). Fails with a message for malformed values.
 	[[nodiscard]] Result<void>
 	ApplyStandardArguments(const ApplicationCommandLineArgs& args, ApplicationSpecification& specification);
 
@@ -60,8 +67,10 @@ namespace Gambit
 	//
 	// One frame is: poll events, then run the fixed-timestep clock to find how many simulation ticks the elapsed real
 	// time is worth; for each tick the input source supplies an InputFrame and every layer's OnFixedUpdate runs; then
-	// OnUpdate and OnRender(alpha) run once. Simulation therefore sees only fixed steps and the tick counter, never
-	// the wall clock. Everything must be used from the main thread. There is one Application per process at a time.
+	// OnUpdate and OnRender(alpha) run once (with a graphics device, OnRender runs between its BeginFrame and Present
+	// and is skipped when no frame can be rendered). Simulation therefore sees only fixed steps and the tick counter,
+	// never the wall clock. Everything must be used from the main thread. There is one Application per process at a
+	// time.
 	class Application
 	{
 	public:
@@ -73,8 +82,9 @@ namespace Gambit
 		[[nodiscard]] static Application& Get();
 		[[nodiscard]] static bool Exists() noexcept { return s_Instance != nullptr; }
 
-		// Sets the working directory and opens the window (unless Headless). Run calls it when needed. Safe to call
-		// twice. On failure nothing stays open and the error says why (no display, bad directory, ...).
+		// Sets the working directory, opens the window (unless Headless) and creates the graphics device (when
+		// EnableGraphics). Run calls it when needed. Safe to call twice. On failure nothing stays open and the error
+		// says why (no display, no Vulkan device, bad directory, ...).
 		[[nodiscard]] Result<void> Initialize();
 		[[nodiscard]] bool IsInitialized() const noexcept { return m_Initialized; }
 
@@ -119,6 +129,9 @@ namespace Gambit
 		[[nodiscard]] bool IsHeadless() const noexcept { return m_Specification.Headless; }
 		// The window; only valid after Initialize and when not Headless.
 		[[nodiscard]] Window& GetWindow();
+		[[nodiscard]] bool HasGraphicsDevice() const noexcept { return m_GraphicsDevice != nullptr; }
+		// The graphics device; only valid after Initialize and with EnableGraphics.
+		[[nodiscard]] GraphicsDevice& GetGraphicsDevice();
 		// Simulation ticks executed so far.
 		[[nodiscard]] uint64_t GetTick() const noexcept { return m_Tick; }
 		[[nodiscard]] uint64_t GetFrameCount() const noexcept { return m_FrameCount; }
@@ -135,6 +148,8 @@ namespace Gambit
 		void RunFixedTick(const InputFrame& input);
 		void UpdateLayers(TimeStep step);
 		void RenderLayers(float alpha);
+		// RenderLayers wrapped in the graphics device's frame, when there is a device.
+		void RenderFrame(float alpha);
 
 		inline static Application* s_Instance = nullptr;
 
@@ -142,6 +157,7 @@ namespace Gambit
 		FixedTimestepClock m_Clock;
 		LayerStack m_Layers;
 		Scope<Window> m_Window;
+		Scope<GraphicsDevice> m_GraphicsDevice; // declared after the window: it is destroyed first
 		Scope<InputDevices> m_Devices;
 		Scope<InputSource> m_InputSource;
 		Ref<InputLog> m_InputRecorder;
@@ -152,5 +168,6 @@ namespace Gambit
 		bool m_Running = false;
 		bool m_Minimized = false;
 		bool m_ClampBurstActive = false;
+		bool m_DeviceLossHandled = false;
 	};
 }

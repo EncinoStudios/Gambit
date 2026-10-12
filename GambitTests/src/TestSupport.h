@@ -10,6 +10,10 @@
 
 namespace Gambit::Tests
 {
+	// Whether the environment variable `name` is set to something other than "" or "0" (GB_TEST_NO_GPU,
+	// GB_UPDATE_GOLDEN).
+	[[nodiscard]] bool IsEnvironmentFlagSet(const char* name);
+
 	// Log setup of the test executable: warnings and above on stderr, no ring buffer.
 	[[nodiscard]] LogConfig MakeTestLogConfig();
 

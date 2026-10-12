@@ -241,7 +241,7 @@ the user acts. `.gproject` is the reflected struct `ProjectSettings`. Data table
 columns doubles (decimals from spreadsheets stay exact); untyped columns are inferred, integers only when they are
 canonical (`007` stays text), and the inferred type is not written back. Prefabs refer to no entity outside themselves and no other prefab; instances record `PrefabInstance`.
 
-**D-019 Vulkan baseline.** Vulkan 1.3 instance/device (NVRHI uses core 1.3 entry points): timeline semaphores,
+**D-036 Vulkan baseline.** Vulkan 1.3 instance/device (NVRHI uses core 1.3 entry points): timeline semaphores,
 synchronization2, dynamic rendering required; shaders target SPIR-V for vulkan1.2. The `Application` owns the
 `GraphicsDevice`; `--no-gpu` disables it. Golden-image tolerance: 2/255 per channel, ≤ 0.1% differing pixels.
 

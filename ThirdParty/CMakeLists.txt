@@ -1,7 +1,7 @@
 # Third-party dependencies (D-003). Sources are pinned git submodules and are never edited (AGENTS.md section 7);
 # patches and configuration live here. Every target below builds with warnings disabled.
 #
-# Wired now: glm, doctest, nlohmann_json, EnTT, glfw, xxhash, lz4, monocypher, stb.
+# Wired now: glm, doctest, nlohmann_json, EnTT, glfw, xxhash, lz4, monocypher, stb, Vulkan-Headers, NVRHI, glslang.
 # The remaining submodules (see ThirdParty/README.md) are wired by the task that first needs them.
 
 set(GB_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -41,6 +41,9 @@ target_compile_definitions(gb_doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 gambit_header_only_library(gb_nlohmann_json nlohmann_json::nlohmann_json nlohmann_json include include/nlohmann/json.hpp)
 gambit_header_only_library(gb_entt EnTT::EnTT entt src src/entt/entt.hpp)
 gambit_header_only_library(gb_stb stb::stb stb "." stb_image.h)
+# All engine IO goes through the VFS (D-014): images are decoded from and encoded to memory, never via stdio. The engine
+# compiles the single implementation translation unit (Gambit/src/Gambit/RHI/Internal/StbImage.cpp).
+target_compile_definitions(gb_stb INTERFACE STBI_NO_STDIO STBI_WRITE_NO_STDIO)
 
 # GLFW: static, no examples/tests/docs, no install rules. The engine talks to Vulkan, never OpenGL.
 gambit_require_submodule(glfw CMakeLists.txt)
@@ -91,3 +94,58 @@ target_include_directories(gb_monocypher SYSTEM PUBLIC
     "${GB_THIRDPARTY_DIR}/Monocypher/src/optional")
 gambit_silence_warnings(gb_monocypher)
 add_library(monocypher::monocypher ALIAS gb_monocypher)
+
+# Vulkan-Headers v1.4.352, the tag NVRHI main is tested with (see ThirdParty/README.md). Headers only: Vulkan is loaded
+# at run time through the Vulkan-Hpp dynamic dispatcher (D-030), and VK_NO_PROTOTYPES keeps any link-time use of the
+# loader out. The Vulkan-Hpp configuration must be identical in every translation unit that includes vulkan.hpp
+# (NVRHI's and the engine's), otherwise the inline functions of both differ (an ODR violation), so it is set here once.
+gambit_require_submodule(Vulkan-Headers include/vulkan/vulkan.hpp)
+add_library(gb_vulkan_headers INTERFACE)
+target_include_directories(gb_vulkan_headers SYSTEM INTERFACE "${GB_THIRDPARTY_DIR}/Vulkan-Headers/include")
+target_compile_definitions(gb_vulkan_headers INTERFACE VK_NO_PROTOTYPES VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+# vk::detail::DynamicLoader uses dlopen.
+target_link_libraries(gb_vulkan_headers INTERFACE ${CMAKE_DL_LIBS})
+add_library(Vulkan::Headers ALIAS gb_vulkan_headers)
+
+# NVRHI: static libraries, Vulkan backend and validation layer only, no install rules, nothing fetched at configure time.
+gambit_require_submodule(nvrhi CMakeLists.txt)
+set(NVRHI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(NVRHI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(NVRHI_INSTALL OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_VULKAN ON CACHE BOOL "" FORCE)
+set(NVRHI_WITH_VALIDATION ON CACHE BOOL "" FORCE)
+set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_DX12 OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_NVAPI OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_RTXMU OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
+set(NVRHI_FETCH_VULKAN_HEADERS OFF CACHE BOOL "" FORCE)
+add_subdirectory(nvrhi EXCLUDE_FROM_ALL)
+gambit_silence_warnings(nvrhi)
+gambit_silence_warnings(nvrhi_vk)
+# The public headers are part of the engine's RHI API; as SYSTEM headers they do not trip first-party warnings.
+target_include_directories(nvrhi SYSTEM INTERFACE "${GB_THIRDPARTY_DIR}/nvrhi/include")
+# nvrhi_vk uses the common code in nvrhi (state tracking, utils) but does not declare it; static link order needs it.
+target_link_libraries(nvrhi_vk PUBLIC nvrhi)
+
+# glslang: only the standalone compiler, used at build time by gb_add_shaders (D-031). No optimizer (ENABLE_OPT=OFF, so
+# SPIRV-Tools is not needed), no HLSL front end, no tests or install rules. Its build generates a header with Python 3.
+gambit_require_submodule(glslang CMakeLists.txt)
+set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+set(ENABLE_SPIRV ON CACHE BOOL "" FORCE)
+set(ENABLE_GLSLANG_BINARIES ON CACHE BOOL "" FORCE)
+set(ENABLE_GLSLANG_JS OFF CACHE BOOL "" FORCE)
+set(ENABLE_PCH ${GB_USE_PCH} CACHE BOOL "" FORCE)
+set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
+set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(glslang EXCLUDE_FROM_ALL)
+foreach(GB_GLSLANG_TARGET glslang glslang-standalone glslang-default-resource-limits SPIRV MachineIndependent
+        GenericCodeGen OSDependent)
+    if(TARGET ${GB_GLSLANG_TARGET})
+        gambit_silence_warnings(${GB_GLSLANG_TARGET})
+    endif()
+endforeach()
+# A build tool, not a product: keep it out of bin/ (which holds what ships).
+set_target_properties(glslang-standalone PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")

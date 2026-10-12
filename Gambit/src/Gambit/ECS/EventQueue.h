@@ -76,10 +76,12 @@ namespace Gambit
 		void Emit(const T& event) { m_Current.push_back(event); }
 		void Emit(T&& event) { m_Current.push_back(std::move(event)); }
 
+		// Builds the event from `args` by list initialization, so a plain-data event needs no constructor. Not
+		// emplace_back(args...): that relies on parenthesized aggregate initialization, which Apple Clang 15 lacks.
 		template<typename... Args>
 		T& Emplace(Args&&... args)
 		{
-			return m_Current.emplace_back(std::forward<Args>(args)...);
+			return m_Current.emplace_back(T{ std::forward<Args>(args)... });
 		}
 
 		// The events of the previous tick, in emission order. Emitting does not invalidate it.

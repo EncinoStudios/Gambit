@@ -45,6 +45,7 @@ option(GB_USE_PCH "Use a precompiled header for the engine library (CI turns it 
 
 include(GambitConfigurations)
 include(GambitCompilerOptions)
+include(GambitShaders)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

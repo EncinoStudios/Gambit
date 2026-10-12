@@ -114,6 +114,39 @@ def print_excerpt(lines: list[str], limit: int = 60, width: int = 300) -> None:
         print(f"... ({len(lines) - limit} more lines)", file=sys.stderr)
 
 
+# Compiler and linker diagnostics worth showing in a CI step log: GCC/Clang "file:line:col: error: text", MSVC
+# "file(line): error C1234: text", linker messages without a location ("ld.lld: error: ...", "undefined reference to ...",
+# "LNK2019: ...") and the driver's own "error:" lines.
+_LOCATED_ERROR = re.compile(r"^(?P<file>.+?):(?P<line>\d+):(?:\d+:)? (?:fatal )?error: (?P<text>.*)$")
+_MSVC_ERROR = re.compile(r"^(?P<file>.+?)\((?P<line>\d+)(?:,\d+)?\): (?:fatal )?error (?P<code>[A-Z]+\d+): (?P<text>.*)$")
+_OTHER_ERROR = re.compile(r"^(?:\S+: (?:fatal )?error: .*|.*undefined reference to .*|.*\bLNK\d+: .*)$")
+
+
+def extract_compiler_errors(lines: list[str], limit: int = 60) -> tuple[list[str], int]:
+    """The distinct compiler/linker error lines of a build log, in order of first appearance, as (shown, total).
+
+    A header error is repeated by every translation unit that includes it, so identical diagnostics are reported once.
+    Paths below the repository root are shown relative to it. Context lines (notes, source excerpts) are dropped; the
+    log has them.
+    """
+    seen: set[str] = set()
+    errors: list[str] = []
+    root = REPO_ROOT.as_posix() + "/"
+    for raw in lines:
+        line = raw.strip()
+        if not (_LOCATED_ERROR.match(line) or _MSVC_ERROR.match(line) or _OTHER_ERROR.match(line)):
+            continue
+        msvc = _MSVC_ERROR.match(line)
+        if msvc:  # the file in the portable spelling of the other compilers, without the column
+            line = f"{msvc['file'].replace(chr(92), '/')}({msvc['line']}): error {msvc['code']}: {msvc['text']}"
+        if line.startswith(root):
+            line = line[len(root):]
+        if line not in seen:
+            seen.add(line)
+            errors.append(line)
+    return errors[:limit], len(errors)
+
+
 def prepare_environment() -> dict[str, str]:
     """Environment for child processes. On Windows, imports the Visual Studio build environment when the
     MSVC compiler is wanted but not yet on PATH (so the scripts work from a plain terminal)."""

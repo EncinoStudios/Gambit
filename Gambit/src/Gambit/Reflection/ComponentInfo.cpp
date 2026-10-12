@@ -113,6 +113,10 @@ namespace Gambit
 	void* ComponentInfo::GetRaw(Entity entity) const
 	{
 		GB_CORE_ASSERT(entity.IsValid(), "component '{}': invalid entity", m_Name);
+		if (HasFlag(ComponentFlags::Internal))
+		{
+			return nullptr;
+		}
 		entt::sparse_set* storage = FindStorage(*entity.GetWorld());
 		if (storage == nullptr || !storage->contains(entity.GetHandle()))
 		{
@@ -131,13 +135,24 @@ namespace Gambit
 		return GetValue(*storage, entity);
 	}
 
-	void ComponentInfo::CopyTo(Entity source, Entity destination) const
+	bool ComponentInfo::CopyTo(Entity source, Entity destination) const
 	{
 		GB_CORE_ASSERT(source.IsValid() && destination.IsValid(), "component '{}': invalid entity", m_Name);
-		CopyTo(*source.GetWorld(), source.GetHandle(), *destination.GetWorld(), destination.GetHandle());
+		return CopyTo(*source.GetWorld(), source.GetHandle(), *destination.GetWorld(), destination.GetHandle());
 	}
 
-	void ComponentInfo::CopyTo(
+	bool ComponentInfo::CopyTo(
+		const World& sourceWorld, entt::entity source, World& destinationWorld, entt::entity destination) const
+	{
+		if (HasFlag(ComponentFlags::Internal))
+		{
+			return false;
+		}
+		CopyToUnchecked(sourceWorld, source, destinationWorld, destination);
+		return true;
+	}
+
+	void ComponentInfo::CopyToUnchecked(
 		const World& sourceWorld, entt::entity source, World& destinationWorld, entt::entity destination) const
 	{
 		const entt::sparse_set* sourceStorage = FindStorage(sourceWorld);
@@ -160,7 +175,7 @@ namespace Gambit
 
 	void ComponentInfo::ForEach(World& world, const std::function<void(Entity, void*)>& function) const
 	{
-		entt::sparse_set* storage = FindStorage(world);
+		entt::sparse_set* storage = HasFlag(ComponentFlags::Internal) ? nullptr : FindStorage(world);
 		if (storage == nullptr)
 		{
 			return;
@@ -177,8 +192,9 @@ namespace Gambit
 
 	std::optional<FieldValue> ComponentInfo::GetFieldValue(Entity entity, std::string_view field) const
 	{
+		GB_CORE_ASSERT(entity.IsValid(), "component '{}': invalid entity", m_Name);
 		const FieldInfo* info = FindField(field);
-		const void* component = info != nullptr ? GetRaw(entity) : nullptr;
+		const void* component = info != nullptr ? GetRaw(*entity.GetWorld(), entity.GetHandle()) : nullptr;
 		if (component == nullptr)
 		{
 			return std::nullopt;

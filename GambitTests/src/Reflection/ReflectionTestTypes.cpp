@@ -92,6 +92,27 @@ namespace Gambit::Tests
 			.Field("Textures", &T::Textures, Attr::AssetType{ "Texture" }, Attr::ReadOnly{})
 			.Field("Cache", &T::Cache, Attr::NotHashed{}, Attr::NotSerialized{});
 
+		registry.RegisterStruct<TestStats>("TestStats")
+			.Field("Level", &TestStats::Level, Attr::Range{ 0.0, 99.0 })
+			.Field("Speed", &TestStats::Speed)
+			.Field("Label", &TestStats::Label);
+		registry.RegisterStruct<TestLayer>("TestLayer")
+			.Field("Clip", &TestLayer::Clip)
+			.Field("Weight", &TestLayer::Weight, Attr::Range{ 0.0, 1.0 })
+			.Field("Mode", &TestLayer::Mode)
+			.Field("Tint", &TestLayer::Tint, Attr::Color{})
+			.Field("Target", &TestLayer::Target)
+			.Field("Stats", &TestLayer::Stats)
+			.Field("Curve", &TestLayer::Curve)
+			.Field("History", &TestLayer::History)
+			.Field("Cache", &TestLayer::Cache, Attr::NotHashed{}, Attr::NotSerialized{});
+		registry.RegisterComponent<StructsComponent>("Structs")
+			.Field("Main", &StructsComponent::Main)
+			.Field("Layers", &StructsComponent::Layers)
+			.Field("Stats", &StructsComponent::Stats)
+			.Field("Source", &StructsComponent::Source, Attr::PlainUUID{})
+			.Field("Sources", &StructsComponent::Sources, Attr::PlainUUID{});
+
 		registry.RegisterComponent<HealthComponent>("Health")
 			.Field("Current", &HealthComponent::Current)
 			.Field("Maximum", &HealthComponent::Maximum);
@@ -155,6 +176,18 @@ namespace Gambit::Tests
 
 	FieldValue MakeDifferentValue(const FieldInfo& field, const FieldValue& current)
 	{
+		if (field.Type == FieldType::Struct)
+		{
+			StructValue changed = std::get<StructValue>(current);
+			changed.Values[0] = MakeDifferentValue(field.Attributes.Struct->GetFields()[0], changed.Values[0]);
+			return changed;
+		}
+		if (field.Type == FieldType::Array && field.ElementType == FieldType::Struct)
+		{
+			auto longer = std::get<std::vector<StructValue>>(current);
+			longer.push_back(field.Attributes.Struct->GetDefault());
+			return longer;
+		}
 		if (field.Type == FieldType::Enum)
 		{
 			const int64_t value = std::get<int64_t>(current);
@@ -169,7 +202,12 @@ namespace Gambit::Tests
 		}
 		return std::visit(
 			[]<typename T>(const T& value) -> FieldValue {
-				if constexpr (IsVector<T>::value)
+				if constexpr (std::is_same_v<T, StructValue>)
+				{
+					FAIL("struct values are handled by their field");
+					return value;
+				}
+				else if constexpr (IsVector<T>::value)
 				{
 					T longer = value;
 					longer.push_back(typename T::value_type{});

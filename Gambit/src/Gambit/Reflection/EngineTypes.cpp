@@ -1,6 +1,8 @@
 #include "gbpch.h"
 
+#include "Gambit/Asset/Components/AssetComponents.h"
 #include "Gambit/ECS/Components/CoreComponents.h"
+#include "Gambit/Project/ProjectSettings.h"
 #include "Gambit/Reflection/TypeRegistry.h"
 
 namespace Gambit
@@ -10,5 +12,7 @@ namespace Gambit
 	void RegisterEngineTypes(TypeRegistry& registry)
 	{
 		RegisterCoreComponents(registry);
+		RegisterAssetComponents(registry);
+		RegisterProjectTypes(registry);
 	}
 }

@@ -38,6 +38,7 @@ namespace Gambit
 	};
 
 	// Hierarchy links; every entity has one. Written only by World (SetParent, DestroyEntity): read it, never edit it.
+	// Files do not store it: they store each entity's parent, and the order of the entities gives the sibling order.
 	struct RelationshipComponent
 	{
 		UUID Parent;                // null for roots
@@ -45,7 +46,8 @@ namespace Gambit
 	};
 
 	// The local-to-world matrix, computed by the TransformSystem from the TransformComponents of the entity and its
-	// ancestors (an ancestor without a transform counts as the identity). Derived data: not serialized, not hashed.
+	// ancestors (an ancestor without a transform counts as the identity). Derived data: not serialized, and it does not
+	// take part in the state hash at all (not even its presence).
 	struct WorldTransformComponent
 	{
 		glm::mat4 Matrix{ 1.0f };

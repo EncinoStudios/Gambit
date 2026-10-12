@@ -35,15 +35,18 @@ namespace Gambit
 		String,
 		Entity,      // UUID of another entity of the same world (the null UUID refers to no entity)
 		AssetHandle, // UUID of an asset of the type named by FieldAttributes::AssetType (null = no asset)
-		Enum,        // one of the values of an EnumInfo; an int64 in a FieldValue
-		Array        // std::vector of an element type: any type above except None and Enum
+		UUID,   // an identifier that refers to nothing in the world or the asset registry: never remapped or resolved
+		Enum,   // one of the values of an EnumInfo; an int64 in a FieldValue
+		Struct, // a reflected struct (StructInfo, FieldAttributes::Struct); a StructValue in a FieldValue
+		Array   // std::vector of an element type: any type above except None, Enum and Array
 	};
 
 	// "Bool", "Vec3", "AssetHandle", ...: the names used in files, schemas and error messages.
 	[[nodiscard]] std::string_view ToString(FieldType type) noexcept;
 	[[nodiscard]] std::optional<FieldType> ParseFieldType(std::string_view name) noexcept;
 
-	// Whether arrays of `type` are supported (every scalar, vector, color, String, Entity and AssetHandle type).
+	// Whether arrays of `type` are supported (every scalar, vector, color, String, Entity, AssetHandle, UUID and
+	// Struct type).
 	[[nodiscard]] constexpr bool IsArrayElementType(FieldType type) noexcept
 	{
 		return type != FieldType::None && type != FieldType::Enum && type != FieldType::Array;
@@ -53,22 +56,38 @@ namespace Gambit
 	// of them.
 	[[nodiscard]] bool IsNumericFieldType(FieldType type) noexcept;
 
+	class StructInfo;
+	struct StructValue;
+
 	// A field value of any FieldType. The alternative is the storage type of the field: Color3 and Vec3 share
-	// glm::vec3, Color4 and Vec4 share glm::vec4, Entity and AssetHandle share UUID and Enum is an int64. The field's
-	// FieldInfo says which FieldType a value has.
+	// glm::vec3, Color4 and Vec4 share glm::vec4, Entity, AssetHandle and UUID share UUID, Enum is an int64 and Struct
+	// is a StructValue. The field's FieldInfo says which FieldType a value has.
 	using FieldValue = std::variant<
 		bool, int32_t, uint32_t, int64_t, uint64_t, float, double, glm::vec2, glm::vec3, glm::vec4, glm::quat,
-		std::string, UUID, std::vector<bool>, std::vector<int32_t>, std::vector<uint32_t>, std::vector<int64_t>,
-		std::vector<uint64_t>, std::vector<float>, std::vector<double>, std::vector<glm::vec2>, std::vector<glm::vec3>,
-		std::vector<glm::vec4>, std::vector<glm::quat>, std::vector<std::string>, std::vector<UUID>>;
+		std::string, UUID, StructValue, std::vector<bool>, std::vector<int32_t>, std::vector<uint32_t>,
+		std::vector<int64_t>, std::vector<uint64_t>, std::vector<float>, std::vector<double>, std::vector<glm::vec2>,
+		std::vector<glm::vec3>, std::vector<glm::vec4>, std::vector<glm::quat>, std::vector<std::string>,
+		std::vector<UUID>, std::vector<StructValue>>;
 
-	// Whether `value` holds the alternative a field of `type` (with `elementType` for arrays) is stored as.
+	// The value of a reflected struct: one value per field of its StructInfo, in field order, each holding the
+	// alternative of the field's type (structs nest, so values are trees). The StructInfo of the field it belongs to
+	// gives the names and types; StructInfo::CanHold checks a value against them.
+	struct StructValue
+	{
+		std::vector<FieldValue> Values;
+	};
+
+	[[nodiscard]] bool operator==(const StructValue& a, const StructValue& b);
+
+	// Whether `value` holds the alternative a field of `type` (with `elementType` for arrays) is stored as. Struct
+	// values are only checked for being struct values: FieldInfo::CanHold checks their contents.
 	[[nodiscard]] bool IsValueOfType(const FieldValue& value, FieldType type, FieldType elementType) noexcept;
 
 	// The neutral value of a type: false, zero, zero vectors and colors, the identity quaternion, "", the null UUID,
-	// enum value 0 and empty arrays. `type` must not be None, and `elementType` must be a valid array element type
-	// exactly when `type` is Array.
-	[[nodiscard]] FieldValue MakeZeroValue(FieldType type, FieldType elementType = FieldType::None);
+	// enum value 0, the defaults of a struct and empty arrays. `type` must not be None, `elementType` must be a valid
+	// array element type exactly when `type` is Array, and `structInfo` must describe the struct when `type` is Struct.
+	[[nodiscard]] FieldValue
+	MakeZeroValue(FieldType type, FieldType elementType = FieldType::None, const StructInfo* structInfo = nullptr);
 
 	namespace Internal
 	{
@@ -113,8 +132,34 @@ namespace Gambit
 			static constexpr FieldType ElementType = FieldTypeOf<T>::Type;
 		};
 
-		// Calls function(std::type_identity<S>{}) with S the FieldValue alternative of `type` (int64_t for Enum).
-		// `type` must not be None or Array (pass the element type of arrays).
+		template<typename T>
+		inline constexpr bool IsStdVector = false;
+		template<typename T>
+		inline constexpr bool IsStdVector<std::vector<T>> = true;
+
+		// T for std::vector<T>, T itself otherwise: the element type of a field that may be an array.
+		template<typename F>
+		struct ArrayElement
+		{
+			using Type = F;
+			static constexpr bool IsArray = false;
+		};
+
+		template<typename T>
+		struct ArrayElement<std::vector<T>>
+		{
+			using Type = T;
+			static constexpr bool IsArray = true;
+		};
+
+		// A class type that is none of the built-in field types: a field of this type, or a std::vector of it, is a
+		// reflected struct that must have been registered with TypeRegistry::RegisterStruct.
+		template<typename E>
+		inline constexpr bool IsStructType =
+			std::is_class_v<E> && !IsStdVector<E> && FieldTypeOf<E>::Type == FieldType::None;
+
+		// Calls function(std::type_identity<S>{}) with S the FieldValue alternative of `type` (int64_t for Enum,
+		// StructValue for Struct). `type` must not be None or Array (pass the element type of arrays).
 		template<typename Function>
 		decltype(auto) VisitStorageType(FieldType type, Function&& function)
 		{
@@ -149,7 +194,10 @@ namespace Gambit
 					return function(std::type_identity<std::string>{});
 				case FieldType::Entity:
 				case FieldType::AssetHandle:
+				case FieldType::UUID:
 					return function(std::type_identity<UUID>{});
+				case FieldType::Struct:
+					return function(std::type_identity<StructValue>{});
 				case FieldType::None:
 				case FieldType::Array:
 					break;

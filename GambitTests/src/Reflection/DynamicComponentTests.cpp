@@ -60,7 +60,7 @@ TEST_CASE("Reflection: script components are registered from a schema")
 	const auto position = std::ranges::find(components, &info);
 	REQUIRE(position != components.end());
 	CHECK((*(position - 1))->GetName() == "Relationship");
-	CHECK((*(position + 1))->GetName() == "Tag");
+	CHECK((*(position + 1))->GetName() == "Structs");
 
 	// Registering the same schema again (a script reload) returns the same type.
 	const Result<const ComponentInfo*> again = registry.RegisterDynamicComponent(MakeScriptSchema());
@@ -117,11 +117,11 @@ TEST_CASE("Reflection: script component instances live in the world")
 
 	// Copies are deep and independent.
 	Entity other = world.CreateEntity("Other");
-	info.CopyTo(entity, other);
+	CHECK(info.CopyTo(entity, other));
 	CHECK(info.GetFieldValue(other, "Label") == FieldValue(std::string("renamed")));
 	CHECK(info.SetFieldValue(other, "Label", std::string("other")));
 	CHECK(info.GetFieldValue(entity, "Label") == FieldValue(std::string("renamed")));
-	info.CopyTo(entity, other); // replaces
+	CHECK(info.CopyTo(entity, other)); // replaces
 	CHECK(info.GetFieldValue(other, "Label") == FieldValue(std::string("renamed")));
 
 	CHECK(info.Remove(entity));
@@ -220,7 +220,7 @@ TEST_CASE("Reflection: invalid script component schemas are rejected with a reas
 
 	// Nothing failed half-way: only the valid schema was added.
 	CHECK(registry.FindComponent("Broken") == nullptr);
-	CHECK(registry.GetComponents().size() == 11);
+	CHECK(registry.GetComponents().size() == 14);
 }
 
 TEST_CASE("Reflection: unregistering a script component removes its instances from every world")

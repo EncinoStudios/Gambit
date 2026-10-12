@@ -3,8 +3,10 @@
 #include "Gambit/Core/Hash.h"
 #include "Gambit/Core/UUID.h"
 #include "Gambit/Math/Math.h"
+#include "Gambit/Reflection/FieldType.h"
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -13,13 +15,21 @@
 // The byte encoding of field values in the state hash (D-013), shared by C++ and script component fields so that
 // both hash alike. Changing it changes every state hash: bump the version seed of World::ComputeStateHash.
 
+namespace Gambit
+{
+	struct FieldInfo;
+
+	// Feeds a value of `field` to a hash: any type, with structs field by field (the fields without NotHashed) and
+	// arrays as their size followed by the elements. The same bytes as hashing the field in place
+	// (FieldInfo::HashValue).
+	void HashFieldValue(Hasher& hasher, const FieldInfo& field, const FieldValue& value);
+	void HashStructValue(Hasher& hasher, const StructInfo& info, const StructValue& value);
+	// The size of the array, then each struct.
+	void HashStructValues(Hasher& hasher, const StructInfo& info, std::span<const StructValue> values);
+}
+
 namespace Gambit::Internal
 {
-	template<typename T>
-	inline constexpr bool IsStdVector = false;
-	template<typename T>
-	inline constexpr bool IsStdVector<std::vector<T>> = true;
-
 	inline void HashText(Hasher& hasher, std::string_view text)
 	{
 		hasher.UpdateValue(static_cast<uint64_t>(text.size()));

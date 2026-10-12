@@ -219,3 +219,24 @@ reading collisions). Both buffers are part of `World::Copy` and of the state has
 **D-018 ECS details (T04).** Worlds hold a pointer to a `TypeRegistry` (global default; tests may use their
 own). `TransformComponent` is optional. Disabled entities carry a derived `InactiveComponent` that systems skip.
 Root ordering is preserved for authoring but not hashed. The state hash includes simulation time.
+
+**D-019 Reflected structs, plain UUIDs, internal and derived components (T05).** `FieldType::Struct` (and arrays of
+structs): a struct registered with `TypeRegistry::RegisterStruct<T>` has `FieldInfo`s like a component; its value is a
+recursive `StructValue` (one `FieldValue` per field), hashed field by field with the same bytes in C++ and script
+components. `FieldType::UUID` (`Attr::PlainUUID`) is an identifier that refers to nothing (never remapped). Generic
+reflection never writes `Internal` components (`GetRaw(Entity)`, `SetFieldValue`, `CopyTo` and `ForEach` refuse them;
+`World::Copy` is the one exception). `ComponentFlags::Derived` components (`WorldTransform`) are neither hashed (not even
+their presence) nor stored. The hash seed became `Gambit.World.StateHash.2`.
+
+**D-028 Serialization details (T05).** Documents are `nlohmann::ordered_json` (`Gambit::Json`). Floats are written as the
+shortest text that reads back exactly (a float32 `0.1` is `0.1`), NaN and infinities as strings. A scene stores each
+entity's `Parent` and relies on list order (hierarchy pre-order) for sibling order; `Relationship` is not stored. Entities
+are always created in hierarchy pre-order, whatever the file's order. Files hold initial states: the seed, not the RNG
+position. Loaders validate first and change nothing on failure; unknown members are warnings, missing ones defaults,
+malformed values errors with JSON pointers. Scene `Settings` is an opaque object owned by the modules.
+
+**D-029 Assets, projects and tables (T05).** A scan never deletes or silently rewrites: missing `.meta` files are created,
+a `.meta` without a handle gets one, duplicates and unreadable metas are reported and the asset stays unregistered until
+the user acts. `.gproject` is the reflected struct `ProjectSettings`. Data table `int` columns are 64-bit and `float`
+columns doubles (decimals from spreadsheets stay exact); untyped columns are inferred, integers only when they are
+canonical (`007` stays text), and the inferred type is not written back. Prefabs refer to no entity outside themselves and no other prefab; instances record `PrefabInstance`.

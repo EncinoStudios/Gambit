@@ -31,8 +31,9 @@ target_compile_definitions(Gambit PUBLIC
     GLM_ENABLE_EXPERIMENTAL)
 
 find_package(Threads REQUIRED)
-# EnTT is part of the public API: World exposes its registry and components are EnTT storages (D-021).
-target_link_libraries(Gambit PUBLIC Threads::Threads glm::glm EnTT::EnTT)
-target_link_libraries(Gambit PRIVATE xxhash::xxhash nlohmann_json::nlohmann_json glfw::glfw)
+# EnTT is part of the public API: World exposes its registry and components are EnTT storages (D-021). So is
+# nlohmann_json: the serialization and command APIs pass JSON documents (Serialization/Json.h).
+target_link_libraries(Gambit PUBLIC Threads::Threads glm::glm EnTT::EnTT nlohmann_json::nlohmann_json)
+target_link_libraries(Gambit PRIVATE xxhash::xxhash glfw::glfw)
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${GB_ENGINE_SOURCES})

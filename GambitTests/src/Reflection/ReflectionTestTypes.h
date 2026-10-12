@@ -59,6 +59,38 @@ namespace Gambit::Tests
 		float Cache = 0.0f; // NotHashed, NotSerialized
 	};
 
+	// Reflected structs: a leaf, and one that nests it, an enum, a color, an array and an array of structs.
+	struct TestStats
+	{
+		int32_t Level = 3;
+		float Speed = 1.5f;
+		std::string Label = "stat";
+	};
+
+	struct TestLayer
+	{
+		std::string Clip = "idle";
+		float Weight = 1.0f;
+		TestMode Mode = TestMode::Slow;
+		glm::vec3 Tint{ 1.0f, 0.5f, 0.25f };
+		UUID Target{ 0x77 };
+		TestStats Stats;
+		std::vector<float> Curve{ 0.0f, 1.0f };
+		std::vector<TestStats> History;
+		float Cache = 0.0f;      // NotHashed, NotSerialized
+		int32_t Unreflected = 5; // not registered: keeps its value when a struct value is written
+	};
+
+	// A struct, an array of structs of the nested kind, and a plain identifier.
+	struct StructsComponent
+	{
+		TestLayer Main;
+		std::vector<TestLayer> Layers;
+		std::vector<TestStats> Stats{ TestStats{ 9, 2.0f, "nine" } };
+		UUID Source{ 0xBEEF };
+		std::vector<UUID> Sources{ UUID(1), UUID(2) };
+	};
+
 	// A plain gameplay-like component.
 	struct HealthComponent
 	{
@@ -70,7 +102,8 @@ namespace Gambit::Tests
 	struct PlayerTagComponent
 	{};
 
-	// RegisterEngineTypes plus "AllTypes", "Health", "PlayerTag" and the enum "TestMode".
+	// RegisterEngineTypes plus "AllTypes", "Structs", "Health", "PlayerTag", the structs "TestStats" and "TestLayer"
+	// and the enum "TestMode".
 	void RegisterTestTypes(TypeRegistry& registry);
 
 	// Attributes with a single property set.

@@ -34,7 +34,7 @@ namespace Gambit
 		{
 			const auto make = [index]<typename S>(std::type_identity<S>) {
 				return Internal::FieldAccess{ index, &LocateDynamicValue, &Internal::ReadStored<S>,
-					                          &Internal::WriteStored<S>, &Internal::HashStored<S> };
+					                          &Internal::WriteStored<S>, &Internal::HashStoredField<S> };
 			};
 			if (type == FieldType::Array)
 			{
@@ -114,6 +114,21 @@ namespace Gambit
 			{
 				return Error::Format("field '{}' is not an Enum field but has enum values", field.Name);
 			}
+			if (valueType == FieldType::Struct)
+			{
+				if (attributes.Struct == nullptr)
+				{
+					return Error::Format("struct field '{}' has no struct", field.Name);
+				}
+				if (!field.CanHold(field.Default))
+				{
+					return Error::Format("struct field '{}': the default does not fit the struct", field.Name);
+				}
+			}
+			else if (attributes.Struct != nullptr)
+			{
+				return Error::Format("field '{}' is not a Struct field but has a struct", field.Name);
+			}
 			if (valueType == FieldType::AssetHandle)
 			{
 				if (!TypeRegistry::IsValidName(attributes.AssetType))
@@ -154,6 +169,23 @@ namespace Gambit
 
 	namespace Internal
 	{
+		FieldValue ReadStructField(const FieldInfo& field, const void* storage)
+		{
+			return FieldValue(std::in_place_type<StructValue>, field.Attributes.Struct->Read(storage));
+		}
+
+		void WriteStructField(const FieldInfo& field, void* storage, const FieldValue& value)
+		{
+			[[maybe_unused]] const bool written =
+				field.Attributes.Struct->Write(storage, *std::get_if<StructValue>(&value));
+			GB_CORE_ASSERT(written, "field '{}': the value does not fit its struct", field.Name);
+		}
+
+		void HashStructField(const FieldInfo& field, Hasher& hasher, const void* storage)
+		{
+			field.Attributes.Struct->Hash(hasher, storage);
+		}
+
 		void ApplyAttribute(FieldInfo& field, const Attr::Range& range)
 		{
 			field.Attributes.Range = FieldRange{ range.Min, range.Max };
@@ -185,6 +217,14 @@ namespace Gambit
 				valueType == FieldType::Vec3 || valueType == FieldType::Vec4,
 				"field '{}': Attr::Color applies to glm::vec3 and glm::vec4 fields only", field.Name);
 			valueType = valueType == FieldType::Vec3 ? FieldType::Color3 : FieldType::Color4;
+		}
+
+		void ApplyAttribute(FieldInfo& field, const Attr::PlainUUID&)
+		{
+			FieldType& valueType = field.Type == FieldType::Array ? field.ElementType : field.Type;
+			GB_CORE_VERIFY(
+				valueType == FieldType::Entity, "field '{}': Attr::PlainUUID applies to UUID fields only", field.Name);
+			valueType = FieldType::UUID;
 		}
 
 		void ApplyAttribute(FieldInfo& field, const Attr::Hidden&)
@@ -262,6 +302,13 @@ namespace Gambit
 			{
 				return Error::Format("component '{}': {}", schema.Name, valid.GetError().Message);
 			}
+			if (field.Attributes.Struct != nullptr
+			    && FindStruct(field.Attributes.Struct->GetName()) != field.Attributes.Struct)
+			{
+				return Error::Format(
+					"component '{}': field '{}' uses struct '{}' of another registry", schema.Name, field.Name,
+					field.Attributes.Struct->GetName());
+			}
 			if (info->FindField(field.Name) != nullptr)
 			{
 				return Error::Format("component '{}': field '{}' is declared twice", schema.Name, field.Name);
@@ -334,6 +381,12 @@ namespace Gambit
 		return found == m_Enums.end() ? nullptr : found->second;
 	}
 
+	Ref<const StructInfo> TypeRegistry::FindStruct(std::string_view name) const
+	{
+		const auto found = m_Structs.find(name);
+		return found == m_Structs.end() ? nullptr : found->second;
+	}
+
 	ComponentInfo& TypeRegistry::AddComponent(Scope<ComponentInfo> info, std::optional<uint32_t> typeIndex)
 	{
 		const std::string& name = info->GetName();
@@ -392,6 +445,33 @@ namespace Gambit
 		++m_Generation;
 	}
 
+	StructInfo& TypeRegistry::AddStruct(std::string_view name, uint32_t typeIndex)
+	{
+		GB_CORE_VERIFY(IsValidName(name), "invalid struct name '{}'", name);
+		GB_CORE_VERIFY(!m_Structs.contains(name), "struct '{}' is registered twice", name);
+		GB_CORE_VERIFY(!m_StructsByType.contains(typeIndex), "the type of struct '{}' is already registered", name);
+		auto info = CreateRef<StructInfo>(StructInfo::ConstructionKey{});
+		info->m_Name = std::string(name);
+		StructInfo& added = *info;
+		m_Structs.emplace(added.m_Name, info);
+		m_StructsByType.emplace(typeIndex, std::move(info));
+		RebuildSortedList();
+		++m_Generation;
+		return added;
+	}
+
+	void TypeRegistry::AddStructField(StructInfo& info, FieldInfo field)
+	{
+		const Result<void> valid = ValidateField(field);
+		GB_CORE_VERIFY(valid.HasValue(), "struct '{}': {}", info.GetName(), valid.GetError().Message);
+		GB_CORE_VERIFY(
+			info.FindField(field.Name) == nullptr, "struct '{}': field '{}' is registered twice", info.GetName(),
+			field.Name);
+		info.m_Default.Values.push_back(field.Default);
+		info.m_Fields.push_back(std::move(field));
+		++m_Generation;
+	}
+
 	void TypeRegistry::RebuildSortedList()
 	{
 		m_Sorted.clear();
@@ -399,6 +479,12 @@ namespace Gambit
 		for (const auto& [name, info] : m_Components)
 		{
 			m_Sorted.push_back(info.get());
+		}
+		m_SortedStructs.clear();
+		m_SortedStructs.reserve(m_Structs.size());
+		for (const auto& [name, info] : m_Structs)
+		{
+			m_SortedStructs.push_back(info.get());
 		}
 	}
 

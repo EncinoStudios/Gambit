@@ -47,9 +47,9 @@ namespace Gambit
 	};
 
 	// A table of rows loaded from a CSV file (D-027): bulk content such as weapons, items or dialogue, kept in files
-	// that spreadsheets and agents can edit. RFC 4180: comma separated, fields with commas, quotes or line breaks in
-	// double quotes ("" for a quote), CRLF or LF line ends, an optional UTF-8 byte order mark. The first row names the
-	// columns, each with an optional type: "Id,Damage:float,Name:string". The first column holds the unique row ids
+	// that spreadsheets and agents can edit. RFC 4180 in UTF-8: comma separated, fields with commas, quotes or line
+	// breaks in double quotes ("" for a quote), CRLF or LF line ends, an optional byte order mark. The first row names
+	// the columns, each with an optional type: "Id,Damage:float,Name:string". The first column holds the unique row ids
 	// (text, and never typed). Untyped columns get a type from their cells: int if all are canonical integers ("7",
 	// "-3", not "007"), else bool if all are true/false, else float if all are numbers, else string; a column with an
 	// empty cell stays string (declare ":float" to read blanks as 0). Typed columns read an empty cell as the default

@@ -83,8 +83,8 @@ namespace Gambit
 		[[nodiscard]] Result<void>
 		Save(const TypeRegistry& types, const Prefab& prefab, VFS& vfs, std::string_view path);
 
-		// Parses a prefab file. Unknown members, components and fields are warnings in `report`; `migrations`
-		// replaces the format's own table (for tests).
+		// Parses a prefab file. Unknown members, components and fields are warnings in `report`, and so are references
+		// to entities outside the prefab, which are cleared; `migrations` replaces the format's own table (for tests).
 		[[nodiscard]] Result<Ref<Prefab>> Parse(
 			const TypeRegistry& types, std::string_view text, std::string_view source, LoadReport& report,
 			const MigrationTable& migrations = GetMigrations());

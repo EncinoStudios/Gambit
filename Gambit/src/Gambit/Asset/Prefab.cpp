@@ -195,6 +195,12 @@ namespace Gambit
 			{
 				return AddSource(source, Error("the prefab has no \"Entities\""));
 			}
+			// A hand-edited file may point outside the prefab; instances would lose those references anyway.
+			if (const size_t cleared = ClearExternalEntityReferences(types, entities); cleared > 0)
+			{
+				report.Warn(
+					"/Entities", std::format("{} reference(s) to entities outside the prefab were cleared", cleared));
+			}
 			Result<Ref<Prefab>> prefab = Prefab::Create(types, std::move(name), std::move(entities));
 			if (!prefab)
 			{

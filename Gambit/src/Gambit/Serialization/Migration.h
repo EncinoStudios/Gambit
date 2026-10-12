@@ -17,7 +17,8 @@ namespace Gambit
 	class MigrationTable
 	{
 	public:
-		// Rewrites `document` in place. The table sets "Version" itself after each step.
+		// Rewrites `document` in place. The table sets "Version" itself after each step. An exception thrown by a step
+		// (the JSON library's accessors throw on unexpected shapes) fails the upgrade like an error.
 		using Step = std::function<Result<void>(Json& document)>;
 
 		// Registers the step that upgrades documents of version `from`. A version can have one step (verified).

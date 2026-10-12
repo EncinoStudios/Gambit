@@ -93,7 +93,8 @@ The same entity format, for one subtree (D-026):
 ```
 
 The first entity is the single root. A prefab refers to no entity outside itself and to no other prefab:
-`PrefabUtils::CreateFromEntity` clears references to other entities and drops `PrefabInstance` components. Instantiating
+`PrefabUtils::CreateFromEntity` clears references to other entities and drops `PrefabInstance` components, and loading
+a file clears such references with a warning. Instantiating
 (`PrefabUtils::Instantiate(world, prefab, parent, transform)`) gives every entity a new UUID (from the world's random
 generator, so simulations stay deterministic), follows the references between the prefab's entities (also those inside
 structs and arrays), places the root under `parent` with `transform` as its local transform, and adds a
@@ -142,16 +143,19 @@ project (`AssetManager::Scan`) finds every file whose name says it is an asset (
 asset directories (`Assets`, `Scenes`, `Data`, `Scripts`) and creates the `.meta` file of the ones that have none. It
 warns about:
 
-- **duplicate handles** (a file copied together with its `.meta`): the first file in path order keeps the handle, the
-  other is not registered until it gets a new one (`AssetManager::AssignNewHandle`); nothing is rewritten on its own;
+- **duplicate handles** (a file copied together with its `.meta`): the file that had the handle before the scan keeps
+  it (on the first scan, the first file in path order), the other is not registered until it gets a new one
+  (`AssetManager::AssignNewHandle`); nothing is rewritten on its own;
 - **orphaned** `.meta` files whose asset is gone (never deleted);
 - **unreadable** `.meta` files (the asset is not registered and the file is not touched);
 - a `.meta` file without a handle (a new one is assigned and the settings are kept) or with another type than the file
-  name says (the file name wins).
+  name says (the file name wins);
+- asset files whose names are not portable project paths (a backslash, `:`, a reserved device name such as `aux.png`):
+  they are not registered and get no `.meta` file until they are renamed.
 
 ## CSV data tables
 
-`Data/Weapons.csv` (D-027) is RFC 4180 text: comma separated; fields with commas, quotes or line breaks in double quotes
+`Data/Weapons.csv` (D-027) is RFC 4180 text in UTF-8 (other encodings are errors): comma separated; fields with commas, quotes or line breaks in double quotes
 (`""` for a quote inside); CRLF or LF; an optional UTF-8 byte order mark (kept when the table is saved). The first row
 names the columns, each with an optional type:
 

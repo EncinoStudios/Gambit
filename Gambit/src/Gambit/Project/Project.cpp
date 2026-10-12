@@ -213,11 +213,16 @@ namespace Gambit
 		{
 			return created.GetError();
 		}
-		if (Result<std::filesystem::path> existing = FindProjectFile(*root); existing)
+		const Result<std::filesystem::path> existing = FindProjectFile(*root);
+		if (existing)
 		{
 			return Error::Format(
 				"'{}' already contains the project file '{}'", FileSystem::ToUtf8(*root),
 				FileSystem::ToUtf8(existing->filename()));
+		}
+		if (!HasFileError(existing.GetError(), FileError::NotFound))
+		{
+			return existing.GetError(); // several project files, or a directory that cannot be listed
 		}
 
 		ProjectSettings settings;

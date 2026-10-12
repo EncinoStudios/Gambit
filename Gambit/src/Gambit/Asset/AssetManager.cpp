@@ -53,9 +53,15 @@ namespace Gambit
 		return report;
 	}
 
+	const AssetRecord* AssetManager::FindByPath(std::string_view path) const
+	{
+		const Result<std::string> normalized = NormalizeAssetPath(path);
+		return normalized ? m_Registry.FindByPath(*normalized) : nullptr;
+	}
+
 	AssetHandle AssetManager::GetHandle(std::string_view path) const
 	{
-		const AssetRecord* record = m_Registry.FindByPath(path);
+		const AssetRecord* record = FindByPath(path);
 		return record != nullptr ? record->Handle : AssetHandle();
 	}
 

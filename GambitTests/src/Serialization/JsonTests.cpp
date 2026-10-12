@@ -174,6 +174,20 @@ TEST_CASE("Serialization: migrations reject documents they cannot upgrade")
 	CHECK(failed.find("version 1 to 2 failed") != std::string::npos);
 	CHECK(failed.find("no luck") != std::string::npos);
 
+	// A step that meets a document it did not expect fails the upgrade instead of throwing out of it.
+	MigrationTable throwing;
+	throwing.Add(1, [](Json& document) -> Result<void> {
+		document["Scale"] = 2.0 * document.at("Scale").get<double>();
+		return {};
+	});
+	for (const char* text : { R"({"Version": 1})", R"({"Version": 1, "Scale": "big"})" })
+	{
+		Json document = Json::parse(text);
+		const Result<void> result = throwing.Upgrade(document, 2, "thing");
+		REQUIRE_FALSE(result.HasValue());
+		CHECK(result.GetError().Message.find("from version 1 to 2 failed") != std::string::npos);
+	}
+
 	Json untouched = Json::parse(R"({"Version": 1})");
 	CHECK(GetNoMigrations().Upgrade(untouched, 1, "thing").HasValue());
 	CHECK(

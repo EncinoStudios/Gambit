@@ -85,6 +85,12 @@ TEST_CASE("Asset: the manager scans a project and knows paths, handles and types
 	CHECK(project.Assets.Find(weapons)->Path == "Data/Weapons.csv");
 	CHECK(project.Assets.FindByPath("Assets/Crate.png")->Type == AssetType::Texture);
 	CHECK_FALSE(project.Assets.GetHandle("Data/Nope.csv").IsValid());
+	// Paths typed by people or tools find the asset in any spelling of the same project path.
+	CHECK(project.Assets.GetHandle("Data\\Weapons.csv") == weapons);
+	CHECK(project.Assets.GetHandle("./Data//Weapons.csv") == weapons);
+	CHECK(project.Assets.FindByPath("Assets/../Data/Weapons.csv")->Handle == weapons);
+	CHECK(project.Assets.FindByPath("../Data/Weapons.csv") == nullptr);
+	CHECK(project.Assets.FindByPath("/Data/Weapons.csv") == nullptr);
 	CHECK(project.Assets.GetPath(UUID(12345)).empty());
 	CHECK(project.Assets.GetType(UUID(12345)) == AssetType::None);
 	CHECK(project.Assets.GetRegistry().GetCount() == 3);

@@ -263,6 +263,30 @@ TEST_CASE("Asset: a scan reports duplicate handles and keeps the first asset in 
 	CHECK(directory.ReadFile("Assets/B.png.meta") == MetaText(0x5, "Texture"));
 }
 
+TEST_CASE("Asset: on a rescan a handle stays with the asset that had it, whatever the name of a copy")
+{
+	TempDirectory directory;
+	directory.WriteFile("Assets/Crate.png", "a");
+	directory.WriteFile("Assets/Crate.png.meta", MetaText(0x5, "Texture"));
+	ScopedLogCapture log;
+	AssetRegistry registry;
+	CHECK(registry.Scan(directory.GetVFS(), Directories).Issues.empty());
+
+	// Copied in a file browser: the copy sorts before the original (' ' < '.').
+	directory.WriteFile("Assets/Crate - Copy.png", "a");
+	directory.WriteFile("Assets/Crate - Copy.png.meta", MetaText(0x5, "Texture"));
+	const ScanReport rescan = registry.Scan(directory.GetVFS(), Directories);
+	REQUIRE(rescan.Count(ScanIssueKind::DuplicateHandle) == 1);
+	CHECK(rescan.Issues[0].Path == "Assets/Crate - Copy.png");
+	CHECK(registry.Find(UUID(0x5))->Path == "Assets/Crate.png");
+	CHECK(registry.FindByPath("Assets/Crate - Copy.png") == nullptr);
+
+	// Without a previous scan there is nothing to go by but the path order.
+	AssetRegistry fresh;
+	REQUIRE(fresh.Scan(directory.GetVFS(), Directories).Count(ScanIssueKind::DuplicateHandle) == 1);
+	CHECK(fresh.Find(UUID(0x5))->Path == "Assets/Crate - Copy.png");
+}
+
 TEST_CASE("Asset: a scan reports orphaned, unreadable and inconsistent .meta files")
 {
 	TempDirectory directory;
@@ -307,6 +331,31 @@ TEST_CASE("Asset: a scan reports orphaned, unreadable and inconsistent .meta fil
 	}
 	CHECK(ToString(ScanIssueKind::OrphanedMeta) == "OrphanedMeta");
 }
+
+#if !defined(_WIN32)
+TEST_CASE("Asset: a scan reports files whose names are not portable project paths")
+{
+	// Linux and macOS disks can hold such names, but they are not virtual paths (D-014): the VFS would read a backslash
+	// as a separator (the .meta file would land in another folder) and refuses ':' and device names everywhere.
+	TempDirectory directory;
+	directory.WriteFile("Assets/Good.png", "x");
+	directory.WriteFile("Assets/back\\slash.png", "x");
+	directory.WriteFile("Assets/aux.png", "x");
+	directory.WriteFile("Assets/drive:c.png", "x");
+
+	ScopedLogCapture log;
+	AssetRegistry registry;
+	const ScanReport report = registry.Scan(directory.GetVFS(), Directories);
+	CHECK(report.AssetCount == 1);
+	CHECK(report.CreatedMetas == 1);
+	CHECK(report.Count(ScanIssueKind::InvalidPath) == 3);
+	CHECK(report.Issues.size() == 3);
+	CHECK(registry.FindByPath("Assets/Good.png") != nullptr);
+	CHECK_FALSE(directory.Exists("Assets/back/slash.png.meta"));
+	CHECK(log.Contains(LogLevel::Warn, "rename the file"));
+	CHECK(ToString(ScanIssueKind::InvalidPath) == "InvalidPath");
+}
+#endif
 
 TEST_CASE("Asset: scanning read-only content reports instead of writing")
 {

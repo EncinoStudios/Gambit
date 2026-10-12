@@ -63,6 +63,8 @@ namespace Gambit
 				return "TypeMismatch";
 			case ScanIssueKind::OrphanedMeta:
 				return "OrphanedMeta";
+			case ScanIssueKind::InvalidPath:
+				return "InvalidPath";
 		}
 		return "Unknown";
 	}
@@ -158,6 +160,9 @@ namespace Gambit
 
 	ScanReport AssetRegistry::Scan(VFS& vfs, std::span<const std::string> directories, const ScanOptions& options)
 	{
+		// Who had which handle before: on a rescan, a file copied together with its .meta file must not take the
+		// handle away from the asset that has it (its references stay with the original).
+		const std::unordered_map<AssetHandle, std::string> previousOwners = std::move(m_PathOfHandle);
 		Clear();
 		ScanReport report;
 
@@ -191,6 +196,15 @@ namespace Gambit
 			const AssetType type = DetectAssetType(path);
 			if (AssetMetadata::IsMetaPath(path) || type == AssetType::None)
 			{
+				continue;
+			}
+			// Mounts list what the disk holds; names that the VFS would read as another path (or refuse) cannot be
+			// assets, and their .meta file would land elsewhere.
+			if (Result<void> valid = ValidatePath(path); !valid)
+			{
+				Report(
+					report, ScanIssueKind::InvalidPath, path,
+					std::format("{}; rename the file to make it an asset", valid.GetError().Message));
 				continue;
 			}
 			Candidate candidate;
@@ -239,14 +253,30 @@ namespace Gambit
 			GB_CORE_ASSERT(added.HasValue(), "Asset scan: a checked asset was refused");
 		};
 
-		// Assets that have a handle claim it, in path order.
+		// Assets that have a handle claim it: first the ones that had it before this scan, then the others in path
+		// order.
 		std::vector<Candidate*> unnamed;
+		const auto isPreviousOwner = [&](const Candidate& candidate) {
+			const auto found = previousOwners.find(candidate.Metadata.Handle);
+			return found != previousOwners.end() && found->second == candidate.Path;
+		};
+		for (const Candidate& candidate : candidates)
+		{
+			if (!candidate.NeedsHandle && isPreviousOwner(candidate))
+			{
+				registerAsset(candidate.Metadata.Handle, candidate);
+			}
+		}
 		for (Candidate& candidate : candidates)
 		{
 			if (candidate.NeedsHandle)
 			{
 				unnamed.push_back(&candidate);
 				continue;
+			}
+			if (isPreviousOwner(candidate))
+			{
+				continue; // registered above
 			}
 			const AssetHandle handle = candidate.Metadata.Handle;
 			if (const AssetRecord* owner = Find(handle); owner != nullptr)

@@ -236,8 +236,19 @@ TEST_CASE("Asset: malformed tables are errors with line and column")
 	CHECK(ParseError("Id,A\nx,\"ab\"c\n").find("unexpected text after the closing quote") != std::string::npos);
 	CHECK(ParseError("Id,A\nx,1\ry,2\n").find("carriage return without a line feed") != std::string::npos);
 
-	// Positions count the lines inside quoted fields, too.
+	// Positions count the lines inside quoted fields, too, also for the cells that follow one in its record.
 	CHECK(ParseError("Id,A\nx,\"multi\nline\"\ny,fine\nz\n").find("line 5: expected 2 fields") != std::string::npos);
+	CHECK(
+		ParseError("Id,Text,N:int\nx,\"two\nlines\",abc\n")
+		== "table.csv: line 3, column 8: column 'N': 'abc' is not a valid int");
+
+	// Text must be UTF-8 (spreadsheets also save "ANSI" CSV files, whose accents would be garbled).
+	CHECK(
+		ParseError("Id,Name\nx,caf\xE9"
+	               "\n")
+		== "table.csv: line 2, column 3: the text is not valid UTF-8 (save the file as UTF-8)");
+	CHECK(ParseError("Id,Na\xFFme\nx,1\n").find("line 1, column 4: the text is not valid UTF-8") != std::string::npos);
+	CHECK(Text(*ParseOk("Id,Name\nx,caf\xC3\xA9\n"), "x", "Name") == "caf\xC3\xA9");
 }
 
 TEST_CASE("Asset: table cells are read and changed with checks")
@@ -270,6 +281,9 @@ TEST_CASE("Asset: table cells are read and changed with checks")
 		!= std::string::npos);
 	CHECK(
 		errorOf(table->SetValue("pistol", "Id", FieldValue(std::string("x")))).find("RenameRow") != std::string::npos);
+	CHECK(
+		errorOf(table->SetValue("pistol", "Name", FieldValue(std::string("bad\xFF")))).find("UTF-8")
+		!= std::string::npos);
 	CHECK(
 		errorOf(table->SetValueFromText("pistol", "Ammo", "many")).find("column 'Ammo': 'many' is not a valid int")
 		!= std::string::npos);
@@ -305,8 +319,11 @@ TEST_CASE("Asset: rows are added, renamed and removed")
 	CHECK(table->HasRow("e")); // the index follows the rows
 	CHECK(*table->GetValue("d", "Damage") == FieldValue(9.5));
 
-	CHECK_FALSE(table->AddRow("d").HasValue());                                             // duplicate
-	CHECK_FALSE(table->AddRow("").HasValue());                                              // empty id
+	CHECK_FALSE(table->AddRow("d").HasValue());    // duplicate
+	CHECK_FALSE(table->AddRow("").HasValue());     // empty id
+	CHECK_FALSE(table->AddRow("\xFF").HasValue()); // not UTF-8
+	CHECK_FALSE(table->AddRow("f", std::vector<FieldValue>{ FieldValue(1.0), FieldValue(std::string("\xC3")) })
+	                .HasValue()); // a string that is not UTF-8
 	CHECK_FALSE(table->AddRow("f", std::vector<FieldValue>{ FieldValue(1.0) }).HasValue()); // too few values
 	CHECK_FALSE(table->AddRow("f", std::vector<FieldValue>{ FieldValue(1), FieldValue(std::string("x")) })
 	                .HasValue()); // wrong type
@@ -315,6 +332,7 @@ TEST_CASE("Asset: rows are added, renamed and removed")
 	CHECK_FALSE(table->RenameRow("nope", "x").HasValue());
 	CHECK_FALSE(table->RenameRow("d", "bee").HasValue());
 	CHECK_FALSE(table->RenameRow("d", "").HasValue());
+	CHECK_FALSE(table->RenameRow("d", "\xFF").HasValue());
 
 	const Ref<DataTable> again = ParseOk(table->ToCsv());
 	CHECK(again->GetRowCount() == 4);

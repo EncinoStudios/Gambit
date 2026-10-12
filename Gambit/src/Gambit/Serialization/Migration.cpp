@@ -43,7 +43,18 @@ namespace Gambit
 				return Error::Format(
 					"the {} file has version {} and there is no migration to version {}", format, version, version + 1);
 			}
-			if (Result<void> upgraded = step->second(document); !upgraded)
+			// Steps edit untrusted documents with the JSON library, whose accessors throw on unexpected shapes; the
+			// exception stops here like any other failed step.
+			Result<void> upgraded;
+			try
+			{
+				upgraded = step->second(document);
+			}
+			catch (const std::exception& exception)
+			{
+				upgraded = Error(exception.what());
+			}
+			if (!upgraded)
 			{
 				return Error::Format(
 					"migrating the {} file from version {} to {} failed: {}", format, version, version + 1,

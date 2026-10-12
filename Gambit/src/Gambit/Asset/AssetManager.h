@@ -62,10 +62,11 @@ namespace Gambit
 		ScanReport Scan(const ScanOptions& options = {});
 		[[nodiscard]] const AssetRegistry& GetRegistry() const noexcept { return m_Registry; }
 
-		// nullptr when there is no such asset.
+		// nullptr when there is no such asset. Paths from tools are normalized first, so "Assets\\Crate.png" and
+		// "./Assets/Crate.png" find "Assets/Crate.png".
 		[[nodiscard]] const AssetRecord* Find(AssetHandle handle) const { return m_Registry.Find(handle); }
-		[[nodiscard]] const AssetRecord* FindByPath(std::string_view path) const { return m_Registry.FindByPath(path); }
-		// The null handle for an unknown path.
+		[[nodiscard]] const AssetRecord* FindByPath(std::string_view path) const;
+		// The null handle for an unknown path (normalized like FindByPath).
 		[[nodiscard]] AssetHandle GetHandle(std::string_view path) const;
 		// Empty for an unknown handle.
 		[[nodiscard]] std::string GetPath(AssetHandle handle) const;

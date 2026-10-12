@@ -343,4 +343,25 @@ TEST_CASE("Asset: malformed prefab files are refused")
 	            .HasValue());
 	CHECK(report.GetWarnings().size() == 1);
 	CHECK(report.GetWarnings()[0].Path == "/Extra");
+
+	// A hand-edited file that refers outside the prefab loads without those references, with a warning.
+	LoadReport dangling;
+	const Result<Ref<Prefab>> edited = PrefabUtils::Parse(
+		fixture.Registry,
+		R"({"Version": 1, "Entities": [{"UUID": "0x1", "Components": {"Structs": {"Main": {"Target": "0x9"},
+		    "Layers": [{"Target": "0x1"}, {"Target": "0x8"}]}}}]})",
+		"x", dangling);
+	REQUIRE(edited.HasValue());
+	REQUIRE(dangling.GetWarnings().size() == 1);
+	CHECK(dangling.GetWarnings()[0].Message.find("2 reference(s)") != std::string::npos);
+	const ComponentData& structs = (*edited)->GetEntities()[0].Components[0];
+	const auto& main = std::get<StructValue>(structs.Fields[0].Value);
+	const auto& layers = std::get<std::vector<StructValue>>(structs.Fields[1].Value);
+	const auto targetOf = [&](const StructValue& layer) {
+		const StructInfo& info = *fixture.Registry.FindStruct("TestLayer");
+		return std::get<UUID>(layer.Values[*info.FindFieldIndex("Target")]);
+	};
+	CHECK(targetOf(main) == UUID());
+	CHECK(targetOf(layers[0]) == UUID(1)); // inside the prefab: kept
+	CHECK(targetOf(layers[1]) == UUID());
 }

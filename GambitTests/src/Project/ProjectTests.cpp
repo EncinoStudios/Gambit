@@ -293,6 +293,13 @@ TEST_CASE("Project: creating a project refuses bad names and existing projects, 
 	REQUIRE_FALSE(again.HasValue());
 	CHECK(again.GetError().Message.find("already contains the project file 'Game.gproject'") != std::string::npos);
 	CHECK_FALSE(std::filesystem::exists(root / "Other.gproject"));
+
+	// A directory with several project files is no place for yet another one.
+	REQUIRE(FileSystem::WriteText(root / "Copy.gproject", ReadTextFile(root / "Game.gproject")).HasValue());
+	const Result<Ref<Project>> third = Project::New(root, "Third");
+	REQUIRE_FALSE(third.HasValue());
+	CHECK(third.GetError().Message.find("contains 2 .gproject files") != std::string::npos);
+	CHECK_FALSE(std::filesystem::exists(root / "Third.gproject"));
 }
 
 TEST_CASE("Project: settings are validated before they are taken")

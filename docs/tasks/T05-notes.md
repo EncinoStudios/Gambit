@@ -61,8 +61,10 @@ Implementation notes and the decisions taken beyond the brief (please confirm th
 8. **Asset scan** (**confirm** the duplicate policy): files below `Assets`, `Scenes`, `Data`, `Scripts` whose names say
    they are assets are registered; missing `.meta` files are created (`ScanOptions::WriteMetas`, default on); a `.meta`
    without a handle gets one with its settings kept; unreadable `.meta` files, duplicates and orphans are reported and
-   never rewritten or deleted. For duplicates the first file in path order keeps the handle and the other stays
-   unregistered until `AssignNewHandle`: guessing which file is the original would silently break references.
+   never rewritten or deleted. For duplicates the file that had the handle before the scan keeps it (review fix: a copy
+   named "Crate - Copy.png" sorts before "Crate.png"), else the first file in path order, and the other stays
+   unregistered until `AssignNewHandle`: guessing which file is the original would silently break references. Asset
+   files with non-portable names (backslash, `:`, device names) are reported as `InvalidPath` (review fix).
    `AnimationClip` and `Skeleton` have no file extensions (they will be sub-assets of mesh imports, T14).
 9. **AssetManager** loads synchronously, caches by handle, remembers failures (logged once) until `ReloadAsset`, and
    `ReloadAsset` replaces the cached object. Hold handles, ask again for current data. `Project::Load` does not scan:

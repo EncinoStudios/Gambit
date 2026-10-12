@@ -2,6 +2,7 @@
 
 #include "Gambit/Asset/DataTable.h"
 
+#include "Gambit/Core/Utf8.h"
 #include "Gambit/Reflection/TypeRegistry.h"
 #include "Gambit/Serialization/Json.h"
 
@@ -176,6 +177,20 @@ namespace Gambit
 			return *uuid;
 		}
 
+		// Whether a cell value can be saved and read back: finite floats and UTF-8 text.
+		bool IsStorable(DataColumnType type, const FieldValue& value)
+		{
+			if (type == DataColumnType::Float)
+			{
+				return std::isfinite(std::get<double>(value));
+			}
+			if (type == DataColumnType::String)
+			{
+				return IsValidUtf8(std::get<std::string>(value));
+			}
+			return true;
+		}
+
 		// The shortest text that reads back as the same double, always recognizable as a float ("2.0", not "2"), so
 		// that a column of whole numbers keeps its type when it is read again without a declared type.
 		std::string FormatFloat(double value)
@@ -221,7 +236,8 @@ namespace Gambit
 		struct CsvField
 		{
 			std::string Text;
-			size_t Column = 0; // 1-based, in characters of its line
+			size_t Line = 0; // 1-based: where the field starts (a record spans several lines when a quoted field does)
+			size_t Column = 0; // 1-based, in bytes of its line
 		};
 
 		struct CsvRecord
@@ -261,6 +277,7 @@ namespace Gambit
 				for (;;)
 				{
 					CsvField field;
+					field.Line = line;
 					field.Column = position - lineStart + 1;
 					bool quoted = false;
 					if (position < text.size() && text[position] == '"')
@@ -318,6 +335,11 @@ namespace Gambit
 							++position;
 						}
 					}
+					if (!IsValidUtf8(field.Text))
+					{
+						return CsvError(
+							source, field.Line, field.Column, "the text is not valid UTF-8 (save the file as UTF-8)");
+					}
 					const bool blankLine = !quoted && field.Text.empty() && record.Fields.empty();
 					record.Fields.push_back(std::move(field));
 
@@ -331,6 +353,7 @@ namespace Gambit
 						if (position >= text.size())
 						{
 							CsvField last;
+							last.Line = line;
 							last.Column = position - lineStart + 1;
 							record.Fields.push_back(std::move(last)); // a trailing comma ends with an empty field
 							break;
@@ -586,7 +609,7 @@ namespace Gambit
 				if (!type.has_value())
 				{
 					return CsvError(
-						source, header.Line, cell.Column,
+						source, cell.Line, cell.Column,
 						std::format(
 							"column '{}': unknown type '{}' (expected {})", trim(name.substr(0, colon)), typeName,
 							TypeNames));
@@ -599,7 +622,7 @@ namespace Gambit
 			if (index == 0 && column.TypeDeclared && column.Type != DataColumnType::String)
 			{
 				return CsvError(
-					source, header.Line, cell.Column,
+					source, cell.Line, cell.Column,
 					std::format(
 						"the first column, '{}', holds the row ids and cannot be {}", column.Name,
 						ToString(column.Type)));
@@ -651,12 +674,12 @@ namespace Gambit
 			const CsvField& idCell = record.Fields[0];
 			if (idCell.Text.empty())
 			{
-				return CsvError(source, record.Line, idCell.Column, "the row id is empty");
+				return CsvError(source, idCell.Line, idCell.Column, "the row id is empty");
 			}
 			if (const auto earlier = firstLine.find(idCell.Text); earlier != firstLine.end())
 			{
 				return CsvError(
-					source, record.Line, idCell.Column,
+					source, idCell.Line, idCell.Column,
 					std::format("duplicate row id '{}' (first used on line {})", idCell.Text, earlier->second));
 			}
 			firstLine.emplace(idCell.Text, record.Line);
@@ -671,7 +694,7 @@ namespace Gambit
 				if (!value)
 				{
 					return CsvError(
-						source, record.Line, cell.Column,
+						source, cell.Line, cell.Column,
 						std::format("column '{}': {}", table->m_Columns[column].Name, value.GetError().Message));
 				}
 				data.Values.push_back(std::move(*value));
@@ -811,9 +834,10 @@ namespace Gambit
 		{
 			return Error::Format("column '{}' holds {} values", column, ToString(type));
 		}
-		if (type == DataColumnType::Float && !std::isfinite(std::get<double>(value)))
+		if (!IsStorable(type, value))
 		{
-			return Error::Format("column '{}' holds finite numbers", column);
+			return Error::Format(
+				"column '{}' holds {}", column, type == DataColumnType::Float ? "finite numbers" : "UTF-8 text");
 		}
 		m_Rows[m_RowIndex.at(std::string(rowId))].Values[*index] = value;
 		return {};
@@ -836,9 +860,9 @@ namespace Gambit
 
 	Result<void> DataTable::AddRow(std::string_view id, std::span<const FieldValue> values)
 	{
-		if (id.empty())
+		if (id.empty() || !IsValidUtf8(id))
 		{
-			return Error("the row id is empty");
+			return Error("the row id must be non-empty UTF-8 text");
 		}
 		if (HasRow(id))
 		{
@@ -862,7 +886,7 @@ namespace Gambit
 			}
 			const FieldValue& value = values[column - 1];
 			if (!IsValueOfType(value, ToFieldType(m_Columns[column].Type), FieldType::None)
-			    || (m_Columns[column].Type == DataColumnType::Float && !std::isfinite(std::get<double>(value))))
+			    || !IsStorable(m_Columns[column].Type, value))
 			{
 				return Error::Format(
 					"column '{}' holds {} values", m_Columns[column].Name, ToString(m_Columns[column].Type));
@@ -893,9 +917,9 @@ namespace Gambit
 		{
 			return Error::Format("there is no row '{}'", id);
 		}
-		if (newId.empty())
+		if (newId.empty() || !IsValidUtf8(newId))
 		{
-			return Error("the row id is empty");
+			return Error("the row id must be non-empty UTF-8 text");
 		}
 		if (id != newId && HasRow(newId))
 		{

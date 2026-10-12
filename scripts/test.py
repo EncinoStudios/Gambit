@@ -23,7 +23,6 @@ import _common as common
 SUMMARY_PATTERN = re.compile(
     r"test cases:\s*(\d+)\s*\|\s*(\d+) passed\s*\|\s*(\d+) failed\s*\|\s*(\d+) skipped")
 ASSERTION_PATTERN = re.compile(r"assertions:\s*(\d+)\s*\|\s*(\d+) passed\s*\|\s*(\d+) failed")
-CTEST_PATTERN = re.compile(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -81,12 +80,11 @@ def run_ctest(arguments: argparse.Namespace, env: dict[str, str]) -> tuple[bool,
                "--output-on-failure"]
     code = common.run_logged(command, log_path, env=env)
     lines = common.read_log(log_path)
-    summary = next((m for m in map(CTEST_PATTERN.search, reversed(lines)) if m), None)
-    if code != 0 or summary is None:
+    total = common.parse_ctest_total(lines)
+    if code != 0 or total is None:
         print(f"test: FAILED smoke tests of {config} (log: {common.relative(log_path)})", file=sys.stderr)
         common.print_excerpt(lines[1:], limit=60)
         return False, ""
-    total = int(summary.group(3))
     return True, f"{total} smoke tests" if total else ""
 
 

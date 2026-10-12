@@ -54,7 +54,7 @@ jobs:
         with:
           key: linux-${{ matrix.compiler }}-${{ matrix.config }}
 
-      - name: Script tests (the build failure report of scripts/build.py)
+      - name: Script tests (build failure report and CTest summary parser of scripts/)
         if: matrix.format
         run: python3 -m unittest discover -s scripts -p "test_*.py"
 

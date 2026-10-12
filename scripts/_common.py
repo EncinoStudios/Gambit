@@ -114,6 +114,21 @@ def print_excerpt(lines: list[str], limit: int = 60, width: int = 300) -> None:
         print(f"... ({len(lines) - limit} more lines)", file=sys.stderr)
 
 
+# CTest's closing line: "100% tests passed, 0 tests failed out of 9". Newer CMake releases (the Homebrew one on the macOS
+# runners) leave out the failure count when it is zero: "100% tests passed out of 7".
+_CTEST_SUMMARY = re.compile(r"\d+% tests passed(?:, \d+ tests? failed)? out of (\d+)")
+
+
+def parse_ctest_total(lines: list[str]) -> int | None:
+    """The number of tests named by CTest's closing summary line, or None when the log has no such line (CTest was
+    killed or crashed before it could report)."""
+    for line in reversed(lines):
+        match = _CTEST_SUMMARY.search(line)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 # Compiler and linker diagnostics worth showing in a CI step log: GCC/Clang "file:line:col: error: text", MSVC
 # "file(line): error C1234: text", linker messages without a location ("ld.lld: error: ...", "undefined reference to ...",
 # "LNK2019: ...") and the driver's own "error:" lines.

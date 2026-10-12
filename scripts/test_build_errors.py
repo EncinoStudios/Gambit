@@ -1,4 +1,5 @@
-"""Unit tests of the build failure report (scripts/_common.py, scripts/build.py).
+"""Unit tests of the helpers of the build and test scripts (scripts/_common.py): the build failure report and
+the CTest summary parser.
 
     python3 -m unittest discover -s scripts -p "test_*.py"
 """
@@ -79,6 +80,24 @@ class ExtractCompilerErrorsTests(unittest.TestCase):
 
     def test_an_empty_log_has_no_errors(self) -> None:
         self.assertEqual(common.extract_compiler_errors([]), ([], 0))
+
+
+class ParseCtestTotalTests(unittest.TestCase):
+    def test_classic_summary_names_the_failure_count(self) -> None:
+        lines = ["9/9 Test #9: GambitEditor.Window ..... Passed", "", "100% tests passed, 0 tests failed out of 9", ""]
+        self.assertEqual(common.parse_ctest_total(lines), 9)
+
+    def test_summary_without_failure_count_of_newer_cmake(self) -> None:
+        lines = ["6/7 Test #6: GambitRuntime.HeadlessRender ...***Skipped", "100% tests passed out of 7", ""]
+        self.assertEqual(common.parse_ctest_total(lines), 7)
+
+    def test_summary_with_failures(self) -> None:
+        self.assertEqual(common.parse_ctest_total(["67% tests passed, 2 tests failed out of 6"]), 6)
+        self.assertEqual(common.parse_ctest_total(["83% tests passed, 1 test failed out of 6"]), 6)
+
+    def test_log_without_summary(self) -> None:
+        self.assertIsNone(common.parse_ctest_total(["Start 1: Cli.Version", "Segmentation fault"]))
+        self.assertIsNone(common.parse_ctest_total([]))
 
 
 if __name__ == "__main__":

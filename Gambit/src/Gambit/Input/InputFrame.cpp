@@ -44,6 +44,11 @@ namespace Gambit
 			SaturatingRound<int32_t>(scaled), -int32_t{ GamepadAxisMaximum }, int32_t{ GamepadAxisMaximum }));
 	}
 
+	int16_t QuantizeGamepadTrigger(float value) noexcept
+	{
+		return std::max(QuantizeGamepadAxis(value), int16_t{ 0 });
+	}
+
 	void InputFrame::Write(BinaryWriter& writer) const
 	{
 		GB_CORE_ASSERT(TextCount <= MaxTextCodepointsPerFrame, "an input frame holds {} code points", TextCount);
@@ -72,6 +77,54 @@ namespace Gambit
 		}
 	}
 
+	Result<void> InputFrame::Validate() const
+	{
+		// Bit 0 is KeyCode::None and bits from KeyCodeCount on do not exist.
+		constexpr uint64_t LowWordValid = ~uint64_t{ 1 };
+		constexpr uint64_t HighWordValid = (uint64_t{ 1 } << (KeyCodeCount - 64)) - 1;
+		if ((Keys[0] & ~LowWordValid) != 0 || (Keys[1] & ~HighWordValid) != 0)
+		{
+			return Error("input frame: unknown key bits");
+		}
+		for (const GamepadFrame& gamepad : Gamepads)
+		{
+			const bool idle =
+				gamepad.Buttons == 0 && std::ranges::all_of(gamepad.Axes, [](int16_t axis) { return axis == 0; });
+			if (!gamepad.Connected && !idle)
+			{
+				return Error("input frame: state of a disconnected gamepad");
+			}
+			if ((gamepad.Buttons >> GamepadButtonCount) != 0)
+			{
+				return Error("input frame: unknown gamepad button bits");
+			}
+			for (size_t index = 0; index < GamepadAxisCount; ++index)
+			{
+				const auto axis = static_cast<GamepadAxis>(index);
+				const int32_t minimum = IsGamepadTrigger(axis) ? 0 : -int32_t{ GamepadAxisMaximum };
+				if (gamepad.Axes[index] < minimum)
+				{
+					return Error(std::format(
+						"input frame: gamepad axis {} is {} (at least {})", ToString(axis), gamepad.Axes[index],
+						minimum));
+				}
+			}
+		}
+		if (TextCount > MaxTextCodepointsPerFrame)
+		{
+			return Error(
+				std::format("input frame: {} typed characters (at most {})", TextCount, MaxTextCodepointsPerFrame));
+		}
+		for (size_t i = 0; i < TextCount; ++i)
+		{
+			if (!IsValidTextCodepoint(Text[i]))
+			{
+				return Error(std::format("input frame: invalid typed code point 0x{:X}", Text[i]));
+			}
+		}
+		return {};
+	}
+
 	Result<InputFrame> InputFrame::Read(BinaryReader& reader)
 	{
 		InputFrame frame;
@@ -97,22 +150,13 @@ namespace Gambit
 				return Error("input frame: invalid gamepad connection flag");
 			}
 			gamepad.Connected = connected == 1;
-			const bool idle =
-				gamepad.Buttons == 0 && std::ranges::all_of(gamepad.Axes, [](int16_t axis) { return axis == 0; });
-			if (!gamepad.Connected && !idle)
-			{
-				return Error("input frame: state of a disconnected gamepad");
-			}
-			if ((gamepad.Buttons >> GamepadButtonCount) != 0)
-			{
-				return Error("input frame: unknown gamepad button bits");
-			}
 		}
 		const uint8_t textCount = reader.ReadU8();
 		if (reader.Failed())
 		{
 			return Error("input frame: truncated data");
 		}
+		// Checked before reading: the count decides how many bytes belong to this frame.
 		if (textCount > MaxTextCodepointsPerFrame)
 		{
 			return Error(
@@ -122,22 +166,15 @@ namespace Gambit
 		for (size_t i = 0; i < textCount; ++i)
 		{
 			frame.Text[i] = reader.ReadU32();
-			if (!reader.Failed() && !IsValidTextCodepoint(frame.Text[i]))
-			{
-				return Error(std::format("input frame: invalid typed code point 0x{:X}", frame.Text[i]));
-			}
 		}
 		if (reader.Failed())
 		{
 			return Error("input frame: truncated data");
 		}
 
-		// Bit 0 is KeyCode::None and bits from KeyCodeCount on do not exist.
-		constexpr uint64_t LowWordValid = ~uint64_t{ 1 };
-		constexpr uint64_t HighWordValid = (uint64_t{ 1 } << (KeyCodeCount - 64)) - 1;
-		if ((frame.Keys[0] & ~LowWordValid) != 0 || (frame.Keys[1] & ~HighWordValid) != 0)
+		if (Result<void> valid = frame.Validate(); !valid)
 		{
-			return Error("input frame: unknown key bits");
+			return valid.GetError();
 		}
 		return frame;
 	}

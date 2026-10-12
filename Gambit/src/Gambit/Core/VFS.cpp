@@ -72,6 +72,26 @@ namespace Gambit
 		{
 			return MakeFileError(FileError::NotFound, std::format("'{}' was not found in any mount", path));
 		}
+
+		// A mount point, or a virtual directory leading to one, is a directory of the virtual tree whatever the mounts
+		// below it contain. Writing or removing it in some mount would leave a file and a directory of the same name
+		// (one shadowing the other), so such paths are rejected outright.
+		template<typename MountList>
+		Result<void> CheckNotMountDirectory(const MountList& mounts, std::string_view path)
+		{
+			for (const auto& mount : mounts)
+			{
+				std::string_view relative;
+				if (mount.MountPoint == path || IsStrictlyBelow(path, mount.MountPoint, relative))
+				{
+					return MakeFileError(
+						FileError::InvalidPath,
+						std::format(
+							"'{}' is a directory of the virtual tree (mount point '{}')", path, mount.MountPoint));
+				}
+			}
+			return {};
+		}
 	}
 
 	Result<void> VFS::Mount(std::string_view mountPoint, Ref<IFileMount> mount)
@@ -298,12 +318,28 @@ namespace Gambit
 		}
 
 		const Ref<const MountList> mounts = GetSnapshot();
+		if (Result<void> directory = CheckNotMountDirectory(*mounts, *normalized); !directory)
+		{
+			return directory;
+		}
 		for (auto entry = mounts->rbegin(); entry != mounts->rend(); ++entry)
 		{
 			std::string_view relative;
-			if (IsWithin(entry->MountPoint, *normalized, relative) && !relative.empty() && entry->Mount->IsWritable())
+			if (!IsWithin(entry->MountPoint, *normalized, relative))
+			{
+				continue;
+			}
+			if (entry->Mount->IsWritable())
 			{
 				return entry->Mount->Write(relative, data);
+			}
+			if (entry->Mount->Exists(relative))
+			{
+				// Writing to an older mount would succeed, but this mount would keep serving its own version.
+				return MakeFileError(
+					FileError::ReadOnly,
+					std::format(
+						"'{}' is provided by a newer read-only mount, which would shadow the write", *normalized));
 			}
 		}
 		return MakeFileError(FileError::ReadOnly, std::format("no writable mount contains '{}'", *normalized));
@@ -327,11 +363,14 @@ namespace Gambit
 		}
 
 		const Ref<const MountList> mounts = GetSnapshot();
+		if (Result<void> directory = CheckNotMountDirectory(*mounts, *normalized); !directory)
+		{
+			return directory;
+		}
 		for (auto entry = mounts->rbegin(); entry != mounts->rend(); ++entry)
 		{
 			std::string_view relative;
-			if (!IsWithin(entry->MountPoint, *normalized, relative) || relative.empty()
-			    || !entry->Mount->Exists(relative))
+			if (!IsWithin(entry->MountPoint, *normalized, relative) || !entry->Mount->Exists(relative))
 			{
 				continue;
 			}

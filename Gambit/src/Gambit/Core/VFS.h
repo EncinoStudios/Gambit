@@ -79,11 +79,13 @@ namespace Gambit
 		[[nodiscard]] Result<std::vector<DirectoryEntry>>
 		List(std::string_view directory, bool recursive = false) const;
 
-		// Writes go to the newest writable mount whose mount point contains `path`; ReadOnly when there is none.
+		// Writes go to the newest writable mount whose mount point contains `path`, so that reads see the new file.
+		// ReadOnly when there is none, or when a newer read-only mount provides `path` (it would shadow the write);
+		// InvalidPath for a mount point or a virtual directory leading to one (those are directories).
 		[[nodiscard]] Result<void> Write(std::string_view path, BufferView data);
 		[[nodiscard]] Result<void> WriteText(std::string_view path, std::string_view text);
 		// Removes a file or an empty directory from the newest mount that has it; ReadOnly when that mount is not
-		// writable.
+		// writable, InvalidPath for a mount point or a virtual directory leading to one.
 		[[nodiscard]] Result<void> Remove(std::string_view path);
 
 	private:

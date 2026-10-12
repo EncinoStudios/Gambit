@@ -1,9 +1,12 @@
 #pragma once
 
 #include "Gambit/Core/Log.h"
+#include "Gambit/Core/LogSinks.h"
 
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace Gambit::Tests
 {
@@ -19,6 +22,21 @@ namespace Gambit::Tests
 		~ScopedLogInit();
 		ScopedLogInit(const ScopedLogInit&) = delete;
 		ScopedLogInit& operator=(const ScopedLogInit&) = delete;
+	};
+
+	// Routes the log into memory only (nothing reaches the console) until destruction, for tests that provoke and
+	// check log messages.
+	class ScopedLogCapture
+	{
+	public:
+		ScopedLogCapture();
+
+		[[nodiscard]] std::vector<LogEntry> GetEntries() const;
+		// Whether a record of exactly `level` contains `text`.
+		[[nodiscard]] bool Contains(LogLevel level, std::string_view text) const;
+
+	private:
+		ScopedLogInit m_Init;
 	};
 
 	// A fresh empty directory under the system temp directory, removed (with its contents) on destruction.

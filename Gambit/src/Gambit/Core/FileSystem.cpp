@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <fstream>
 #include <new>
 #include <system_error>
@@ -35,32 +36,97 @@ namespace Gambit::FileSystem
 			temporary += std::format(".{:016x}.tmp", UUID::Generate().GetValue());
 			return temporary;
 		}
+
+		Error
+		MakeClassifiedError(const std::error_code& error, std::string_view what, const std::filesystem::path& path)
+		{
+			return MakeFileError(ClassifyError(error), std::format("{} '{}': {}", what, ToUtf8(path), error.message()));
+		}
+
+		// The error of a failed stream open. The standard streams report failure only through their state, but every
+		// supported library opens files with fopen/open (_wfsopen on Windows), which set errno.
+		std::error_code LastStreamError() noexcept
+		{
+			const int code = errno;
+			return code != 0 ? std::error_code(code, std::generic_category())
+							 : std::make_error_code(std::errc::io_error);
+		}
+
+		// The status of `path`, or the classified reason it cannot be determined. A missing path is a status
+		// (file_type::not_found), not an error, so callers decide what absence means for them.
+		Result<std::filesystem::file_status> GetStatus(const std::filesystem::path& path)
+		{
+			std::error_code error;
+			const std::filesystem::file_status status = std::filesystem::status(path, error);
+			if (status.type() == std::filesystem::file_type::not_found)
+			{
+				return status;
+			}
+			if (error)
+			{
+				return MakeClassifiedError(error, "cannot access", path);
+			}
+			return status;
+		}
+
+		// Locale-independent on purpose: path rules must not change with the user's locale.
+		constexpr char ToAsciiUpper(char character) noexcept
+		{
+			return character >= 'a' && character <= 'z' ? static_cast<char>(character - 'a' + 'A') : character;
+		}
+
+		bool EqualsIgnoringAsciiCase(std::string_view a, std::string_view b) noexcept
+		{
+			return a.size() == b.size()
+				&& std::ranges::equal(a, b, [](char x, char y) { return ToAsciiUpper(x) == ToAsciiUpper(y); });
+		}
+	}
+
+	FileError ClassifyError(const std::error_code& error) noexcept
+	{
+		if (error == std::errc::no_such_file_or_directory || error == std::errc::not_a_directory)
+		{
+			return FileError::NotFound;
+		}
+		if (error == std::errc::permission_denied || error == std::errc::operation_not_permitted)
+		{
+			return FileError::PermissionDenied;
+		}
+		if (error == std::errc::read_only_file_system)
+		{
+			return FileError::ReadOnly;
+		}
+		return FileError::Io;
 	}
 
 	Result<Buffer> ReadBinary(const std::filesystem::path& path)
 	{
-		std::error_code error;
-		const std::filesystem::file_status status = std::filesystem::status(path, error);
-		if (!std::filesystem::exists(status))
+		const Result<std::filesystem::file_status> status = GetStatus(path);
+		if (!status)
+		{
+			return status.GetError();
+		}
+		if (!std::filesystem::exists(*status))
 		{
 			return MakeFileError(FileError::NotFound, std::format("'{}' does not exist", ToUtf8(path)));
 		}
-		if (std::filesystem::is_directory(status))
+		if (std::filesystem::is_directory(*status))
 		{
 			return MakeFileError(FileError::InvalidPath, std::format("'{}' is a directory", ToUtf8(path)));
 		}
 
+		std::error_code error;
 		const std::uintmax_t size = std::filesystem::file_size(path, error);
 		if (error)
 		{
-			return MakeFileError(
-				FileError::Io, std::format("cannot get the size of '{}': {}", ToUtf8(path), error.message()));
+			return MakeClassifiedError(error, "cannot get the size of", path);
 		}
 
+		errno = 0;
 		std::ifstream stream(path, std::ios::binary);
 		if (!stream)
 		{
-			return MakeFileError(FileError::Io, std::format("cannot open '{}' for reading", ToUtf8(path)));
+			return MakeClassifiedError(LastStreamError(), "cannot open for reading", path);
 		}
 
 		Buffer buffer;
@@ -112,10 +178,11 @@ namespace Gambit::FileSystem
 
 		const std::filesystem::path temporary = MakeTemporaryPath(path);
 		{
+			errno = 0;
 			std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
 			if (!stream)
 			{
-				return MakeFileError(FileError::Io, std::format("cannot create '{}' for writing", ToUtf8(temporary)));
+				return MakeClassifiedError(LastStreamError(), "cannot create for writing", temporary);
 			}
 			stream.write(reinterpret_cast<const char*>(data.Data()), static_cast<std::streamsize>(data.Size()));
 			stream.flush();
@@ -134,7 +201,7 @@ namespace Gambit::FileSystem
 		{
 			std::error_code ignored;
 			std::filesystem::remove(temporary, ignored);
-			return MakeFileError(FileError::Io, std::format("cannot replace '{}': {}", ToUtf8(path), error.message()));
+			return MakeClassifiedError(error, "cannot replace", path);
 		}
 		return {};
 	}
@@ -152,11 +219,14 @@ namespace Gambit::FileSystem
 
 	Result<void> CreateDirectories(const std::filesystem::path& path)
 	{
-		std::error_code error;
-		const std::filesystem::file_status status = std::filesystem::status(path, error);
-		if (std::filesystem::exists(status))
+		const Result<std::filesystem::file_status> status = GetStatus(path);
+		if (!status)
 		{
-			if (std::filesystem::is_directory(status))
+			return status.GetError();
+		}
+		if (std::filesystem::exists(*status))
+		{
+			if (std::filesystem::is_directory(*status))
 			{
 				return {};
 			}
@@ -164,28 +234,32 @@ namespace Gambit::FileSystem
 				FileError::InvalidPath, std::format("'{}' exists and is not a directory", ToUtf8(path)));
 		}
 
+		std::error_code error;
 		std::filesystem::create_directories(path, error);
 		if (error)
 		{
-			return MakeFileError(
-				FileError::Io, std::format("cannot create directory '{}': {}", ToUtf8(path), error.message()));
+			return MakeClassifiedError(error, "cannot create directory", path);
 		}
 		return {};
 	}
 
 	Result<std::vector<DirectoryEntry>> ListDirectory(const std::filesystem::path& path, bool recursive)
 	{
-		std::error_code error;
-		const std::filesystem::file_status status = std::filesystem::status(path, error);
-		if (!std::filesystem::exists(status))
+		const Result<std::filesystem::file_status> status = GetStatus(path);
+		if (!status)
+		{
+			return status.GetError();
+		}
+		if (!std::filesystem::exists(*status))
 		{
 			return MakeFileError(FileError::NotFound, std::format("'{}' does not exist", ToUtf8(path)));
 		}
-		if (!std::filesystem::is_directory(status))
+		if (!std::filesystem::is_directory(*status))
 		{
 			return MakeFileError(FileError::InvalidPath, std::format("'{}' is not a directory", ToUtf8(path)));
 		}
 
+		std::error_code error;
 		std::vector<DirectoryEntry> entries;
 		const auto collect = [&](auto iterator) -> bool {
 			for (const auto end = decltype(iterator){}; iterator != end; iterator.increment(error))
@@ -211,7 +285,7 @@ namespace Gambit::FileSystem
 										: collect(std::filesystem::directory_iterator(path, error));
 		if (!complete || error)
 		{
-			return MakeFileError(FileError::Io, std::format("cannot list '{}': {}", ToUtf8(path), error.message()));
+			return MakeClassifiedError(error, "cannot list", path);
 		}
 
 		std::ranges::sort(entries, [](const DirectoryEntry& a, const DirectoryEntry& b) { return a.Path < b.Path; });
@@ -264,6 +338,19 @@ namespace Gambit::FileSystem
 				return MakeFileError(
 					FileError::InvalidPath, std::format("'{}' contains a control character or ':'", path));
 			}
+			// Windows drops trailing dots and spaces from names, so such a segment names another file there.
+			if (segment.back() == '.' || segment.back() == ' ')
+			{
+				return MakeFileError(
+					FileError::InvalidPath,
+					std::format("'{}': the name '{}' ends with a dot or a space (not portable)", path, segment));
+			}
+			if (IsReservedDeviceName(segment))
+			{
+				return MakeFileError(
+					FileError::InvalidPath,
+					std::format("'{}': '{}' is a reserved device name on Windows (not portable)", path, segment));
+			}
 			segments.push_back(segment);
 		}
 
@@ -277,6 +364,39 @@ namespace Gambit::FileSystem
 			normalized += segments[index];
 		}
 		return normalized;
+	}
+
+	bool IsReservedDeviceName(std::string_view segment) noexcept
+	{
+		// Windows ignores everything from the first dot ("nul.tar.gz") and trailing spaces before it ("nul .txt").
+		std::string_view stem = segment.substr(0, segment.find('.'));
+		while (!stem.empty() && stem.back() == ' ')
+		{
+			stem.remove_suffix(1);
+		}
+
+		for (const std::string_view name : { "CON", "PRN", "AUX", "NUL" })
+		{
+			if (EqualsIgnoringAsciiCase(stem, name))
+			{
+				return true;
+			}
+		}
+		for (const std::string_view prefix : { "COM", "LPT" })
+		{
+			if (stem.size() < 4 || !EqualsIgnoringAsciiCase(stem.substr(0, 3), prefix))
+			{
+				continue;
+			}
+			const std::string_view suffix = stem.substr(3);
+			// A digit, or superscript one, two or three (U+00B9, U+00B2, U+00B3 in UTF-8).
+			if ((suffix.size() == 1 && suffix[0] >= '0' && suffix[0] <= '9') || suffix == "\xC2\xB9"
+			    || suffix == "\xC2\xB2" || suffix == "\xC2\xB3")
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	bool IsAbsolutePath(std::string_view path) noexcept

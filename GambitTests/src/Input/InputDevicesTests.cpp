@@ -262,6 +262,14 @@ TEST_CASE("Input: InputDevices quantizes gamepad state")
 	// What a device produces is always a frame that can be stored in a log.
 	CHECK(InputFrame::Deserialize(frame.Serialize()).HasValue());
 
+	// Out-of-range platform readings are clamped to the range of the axis, so they can still be recorded.
+	state.Pads[2]->Axes[static_cast<size_t>(GamepadAxis::LeftTrigger)] = -0.5f;
+	state.Pads[2]->Axes[static_cast<size_t>(GamepadAxis::RightX)] = -1.5f;
+	const InputFrame clamped = devices.Sample();
+	CHECK(clamped.Gamepads[2].Axes[static_cast<size_t>(GamepadAxis::LeftTrigger)] == 0);
+	CHECK(clamped.Gamepads[2].Axes[static_cast<size_t>(GamepadAxis::RightX)] == -32767);
+	CHECK(InputFrame::Deserialize(clamped.Serialize()).HasValue());
+
 	state.Pads[2].reset(); // unplugged
 	CHECK_FALSE(devices.Sample().Gamepads[2].Connected);
 }

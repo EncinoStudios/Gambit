@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -567,6 +568,80 @@ TEST_CASE("Core: VFS writes go to the newest writable mount that contains the pa
 	CHECK_FALSE(vfs.WriteText("", "x").HasValue());
 }
 
+TEST_CASE("Core: VFS never writes or removes a mount point or a virtual directory leading to one")
+{
+	VFS vfs;
+	const Ref<MemoryMount> root = MakeMemory({ { "Saves/old.txt", "shadowed" } }, true);
+	const Ref<MemoryMount> saves = MakeMemory({}, true);
+	REQUIRE(vfs.Mount("", root).HasValue());
+	REQUIRE(vfs.Mount("Saves", saves).HasValue());
+	REQUIRE(vfs.Mount("Engine/Shaders", MakeMemory({ { "PBR.glsl", "pbr" } })).HasValue());
+
+	for (const char* path : { "Saves", "./Saves/", "Engine", "Engine/Shaders" })
+	{
+		const Result<void> write = vfs.WriteText(path, "x");
+		REQUIRE_MESSAGE(!write.HasValue(), "path: ", path);
+		CHECK(HasFileError(write.GetError(), FileError::InvalidPath));
+		const Result<void> remove = vfs.Remove(path);
+		REQUIRE_MESSAGE(!remove.HasValue(), "path: ", path);
+		CHECK(HasFileError(remove.GetError(), FileError::InvalidPath));
+	}
+	// Nothing landed in the older root mount, where the newer mounts would have shadowed it.
+	CHECK(root->Get("Saves") == "<missing>");
+	CHECK(root->Get("Engine") == "<missing>");
+	CHECK(Text(vfs, "Engine/Shaders/PBR.glsl") == "pbr");
+
+	// Below the mount point the newest mount that contains the path gets the write.
+	REQUIRE(vfs.WriteText("Saves/slot1.json", "{}").HasValue());
+	CHECK(saves->Get("slot1.json") == "{}");
+	CHECK(root->Get("Saves/slot1.json") == "<missing>");
+	CHECK(Text(vfs, "Saves/slot1.json") == "{}");
+
+	// The same holds when the mount point belongs to an older mount than the writable one.
+	VFS older;
+	const Ref<MemoryMount> newerRoot = MakeMemory({}, true);
+	REQUIRE(older.Mount("Saves", MakeMemory({}, true)).HasValue());
+	REQUIRE(older.Mount("", newerRoot).HasValue());
+	CHECK_FALSE(older.WriteText("Saves", "x").HasValue());
+	CHECK(newerRoot->Get("Saves") == "<missing>");
+}
+
+TEST_CASE("Core: VFS rejects a write that a newer read-only mount would shadow")
+{
+	VFS vfs;
+	const Ref<MemoryMount> writable = MakeMemory({}, true);
+	REQUIRE(vfs.Mount("", writable).HasValue());
+	REQUIRE(vfs.Mount("", MakeMemory({ { "locked.txt", "pack" }, { "Data/table.csv", "pack" } })).HasValue());
+
+	for (const char* path : { "locked.txt", "Data/table.csv" })
+	{
+		const Result<void> write = vfs.WriteText(path, "edited");
+		REQUIRE_MESSAGE(!write.HasValue(), "path: ", path);
+		CHECK(HasFileError(write.GetError(), FileError::ReadOnly));
+		CHECK(Text(vfs, path) == "pack");
+	}
+	CHECK(writable->Get("locked.txt") == "<missing>");
+
+	// Paths the read-only mount does not provide still reach the writable mount.
+	REQUIRE(vfs.WriteText("Data/other.csv", "mine").HasValue());
+	CHECK(Text(vfs, "Data/other.csv") == "mine");
+}
+
+TEST_CASE("Core: VFS rejects names that are not portable")
+{
+	VFS vfs;
+	const Ref<MemoryMount> writable = MakeMemory({}, true);
+	REQUIRE(vfs.Mount("", writable).HasValue());
+	for (const char* path : { "Assets/con.txt", "LPT1", "Scenes/Main.gscene.", "Data/table " })
+	{
+		const Result<void> write = vfs.WriteText(path, "x");
+		REQUIRE_MESSAGE(!write.HasValue(), "path: ", path);
+		CHECK(HasFileError(write.GetError(), FileError::InvalidPath));
+		CHECK_FALSE(vfs.Exists(path));
+	}
+	CHECK_FALSE(vfs.Mount("aux", MakeMemory({})).HasValue());
+}
+
 TEST_CASE("Core: VFS write fails when no mount is writable")
 {
 	VFS vfs;
@@ -651,6 +726,42 @@ TEST_CASE("Core: VFS over directories on disk")
 	CHECK(Text(vfs, "Shared.txt") == "engine shared");
 	CHECK_FALSE(vfs.Remove("Defaults/Material.gmat").HasValue()); // read-only engine mount
 }
+
+// Refused access needs POSIX permissions (see the FileSystem test of the same behaviour).
+#if !defined(_WIN32)
+TEST_CASE("Core: VFS reports refused access instead of falling through to an older mount")
+{
+	Tests::ScopedTempDirectory lower;
+	Tests::ScopedTempDirectory upper;
+	WriteFile(lower.GetPath() / "Config" / "settings.json", "lower");
+	WriteFile(upper.GetPath() / "Config" / "settings.json", "upper");
+
+	struct Restore
+	{
+		fs::path Directory;
+		~Restore()
+		{
+			std::error_code ignored;
+			fs::permissions(Directory, fs::perms::owner_all, ignored);
+		}
+	} restore{ upper.GetPath() / "Config" };
+	std::error_code error;
+	fs::permissions(upper.GetPath() / "Config", fs::perms::none, error);
+	REQUIRE_FALSE(error);
+	if (FileSystem::ReadText(upper.GetPath() / "Config" / "settings.json").HasValue())
+	{
+		MESSAGE("running with privileges that bypass file permissions; refused access cannot be provoked");
+		return;
+	}
+
+	VFS vfs;
+	REQUIRE(vfs.Mount("", CreateRef<DirectoryMount>(lower.GetPath(), false)).HasValue());
+	REQUIRE(vfs.Mount("", CreateRef<DirectoryMount>(upper.GetPath(), false)).HasValue());
+	const Result<std::string> read = vfs.ReadText("Config/settings.json");
+	REQUIRE_FALSE(read.HasValue());
+	CHECK(HasFileError(read.GetError(), FileError::PermissionDenied));
+}
+#endif
 
 TEST_CASE("Core: VFS reads are safe from many threads while mounts change")
 {

@@ -45,10 +45,11 @@ namespace Gambit
 		// The recorded input of tick `index` (0 is the first tick); the index must be in range.
 		[[nodiscard]] const InputFrame& GetFrame(size_t index) const;
 
-		// Whether the header can be stored: strings of at most MaxInputLogStringLength bytes, a rate of 1 to 1000 Hz.
+		// Whether the log can be stored and loaded again: header strings of at most MaxInputLogStringLength bytes, a
+		// rate of 1 to 1000 Hz and frames that pass InputFrame::Validate.
 		[[nodiscard]] Result<void> Validate() const;
 
-		// The binary form; the header must be valid (Save checks it and reports a problem instead).
+		// The binary form; the log must be valid (Save checks it and reports a problem instead).
 		[[nodiscard]] Buffer Serialize() const;
 		[[nodiscard]] static Result<InputLog> Deserialize(BufferView bytes);
 

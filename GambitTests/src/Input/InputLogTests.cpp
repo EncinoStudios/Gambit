@@ -203,6 +203,17 @@ TEST_CASE("Input: InputLog validates the content even when the checksum matches"
 	CHECK(message.find("frame 1:") != std::string::npos);
 	CHECK(message.find("unknown key bits") != std::string::npos);
 
+	// Frame 0 has gamepad 0 connected; its left trigger (axis 4) sits after keys 16, buttons 1, mouse 24, the
+	// connection flag 1, buttons 2 and four stick axes.
+	Buffer negativeTrigger = Buffer::Copy(valid);
+	constexpr size_t LeftTriggerOffset = FramesOffset + 16 + 1 + 24 + 1 + 2 + 4 * 2;
+	negativeTrigger.Data()[LeftTriggerOffset] = std::byte{ 0xFF };
+	negativeTrigger.Data()[LeftTriggerOffset + 1] = std::byte{ 0xFF };
+	FixChecksum(negativeTrigger);
+	const std::string triggerMessage = ErrorOf(negativeTrigger);
+	CHECK(triggerMessage.find("frame 0:") != std::string::npos);
+	CHECK(triggerMessage.find("LeftTrigger is -1") != std::string::npos);
+
 	Buffer hugeString = Buffer::Copy(valid);
 	hugeString.Data()[8 + 2] = std::byte{ 0x01 }; // project name length 0x0001000B
 	FixChecksum(hugeString);
@@ -222,6 +233,32 @@ TEST_CASE("Input: InputLog validates its header before it is written")
 	Tests::ScopedTempDirectory directory;
 	CHECK_FALSE(tooLong.Save(directory.GetPath() / "bad.ginput").HasValue());
 	CHECK_FALSE(FileSystem::Exists(directory.GetPath() / "bad.ginput"));
+}
+
+TEST_CASE("Input: InputLog refuses to save frames that could not be loaded again")
+{
+	InputLog log = SampleLog(3);
+	InputFrame outOfRange;
+	outOfRange.Gamepads[1].Connected = true;
+	outOfRange.Gamepads[1].Axes[static_cast<size_t>(GamepadAxis::RightTrigger)] = -100;
+	log.Record(outOfRange);
+
+	const Result<void> valid = log.Validate();
+	REQUIRE_FALSE(valid.HasValue());
+	CHECK(valid.GetError().Message.find("frame 3:") != std::string::npos);
+	CHECK(valid.GetError().Message.find("RightTrigger") != std::string::npos);
+
+	Tests::ScopedTempDirectory directory;
+	CHECK_FALSE(log.Save(directory.GetPath() / "bad.ginput").HasValue());
+	CHECK_FALSE(FileSystem::Exists(directory.GetPath() / "bad.ginput"));
+
+	InputFrame disconnected;
+	disconnected.Gamepads[0].Buttons = 1; // state on a gamepad that is not connected
+	CHECK_FALSE(disconnected.Validate().HasValue());
+	InputFrame tooMuchText;
+	tooMuchText.TextCount = static_cast<uint8_t>(MaxTextCodepointsPerFrame + 1);
+	CHECK_FALSE(tooMuchText.Validate().HasValue());
+	CHECK(SampleLog(3).Validate().HasValue());
 }
 
 TEST_CASE("Input: InputLog saves and loads files")

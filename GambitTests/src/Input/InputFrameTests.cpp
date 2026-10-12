@@ -31,7 +31,7 @@ namespace
 		frame.Gamepads[0].SetButton(GamepadButton::DpadLeft, true);
 		frame.Gamepads[0].Axes = { 32767, -32767, 0, 1000, 0, 32767 };
 		frame.Gamepads[3].Connected = true;
-		frame.Gamepads[3].Axes[static_cast<size_t>(GamepadAxis::LeftX)] = -32768;
+		frame.Gamepads[3].Axes[static_cast<size_t>(GamepadAxis::LeftX)] = -32767;
 		frame.AddText('h');
 		frame.AddText(0xE9);
 		frame.AddText(0x1F600);
@@ -183,6 +183,18 @@ TEST_CASE("Input: quantization to fixed point")
 	CHECK(QuantizeGamepadAxis(7.0f) == 32767);
 	CHECK(QuantizeGamepadAxis(-7.0f) == -32767);
 	CHECK(QuantizeGamepadAxis(std::numeric_limits<float>::quiet_NaN()) == 0);
+
+	CHECK(QuantizeGamepadTrigger(0.0f) == 0);
+	CHECK(QuantizeGamepadTrigger(1.0f) == 32767);
+	CHECK(QuantizeGamepadTrigger(0.5f) == 16384);
+	CHECK(QuantizeGamepadTrigger(-0.25f) == 0); // a trigger never goes below rest
+	CHECK(QuantizeGamepadTrigger(3.0f) == 32767);
+	CHECK(QuantizeGamepadTrigger(std::numeric_limits<float>::quiet_NaN()) == 0);
+
+	CHECK(IsGamepadTrigger(GamepadAxis::LeftTrigger));
+	CHECK(IsGamepadTrigger(GamepadAxis::RightTrigger));
+	CHECK_FALSE(IsGamepadTrigger(GamepadAxis::LeftX));
+	CHECK_FALSE(IsGamepadTrigger(GamepadAxis::RightY));
 }
 
 TEST_CASE("Input: InputFrame serialization round-trips")
@@ -219,7 +231,7 @@ TEST_CASE("Input: InputFrame binary layout is fixed")
 	CHECK(bytes.Data()[6 + 16] == std::byte{ 0 });    // MouseButtons
 	CHECK(bytes.Data()[6 + 17] == std::byte{ 0x04 }); // MouseX, little endian
 	CHECK(bytes.Data()[6 + 20] == std::byte{ 0x01 });
-	CHECK(Hash::XXH64(RichFrame().Serialize().View(), 0) == 0x3CAB'6AF1'33FC'D13Eull);
+	CHECK(Hash::XXH64(RichFrame().Serialize().View(), 0) == 0x1CD2'664C'FB19'A934ull);
 }
 
 TEST_CASE("Input: InputFrame deserialization rejects bad headers and truncated data")
@@ -268,6 +280,26 @@ TEST_CASE("Input: InputFrame deserialization rejects values no frame can hold")
 	CHECK_FALSE(InputFrame::Deserialize(connected).HasValue());
 	connected.Data()[Gamepad0 + 2] = std::byte{ 0x40 }; // button bit 14: DpadLeft
 	CHECK(InputFrame::Deserialize(connected).HasValue());
+
+	// Gamepad axes: sticks in [-32767, 32767], triggers in [0, 32767] (what QuantizeGamepadAxis/Trigger produce).
+	const auto withAxis = [&](GamepadAxis axis, int16_t value) {
+		Buffer bytes = Buffer::Copy(connected);
+		const size_t offset = Gamepad0 + 3 + 2 * static_cast<size_t>(axis);
+		const auto raw = static_cast<uint16_t>(value);
+		bytes.Data()[offset] = static_cast<std::byte>(raw & 0xFF);
+		bytes.Data()[offset + 1] = static_cast<std::byte>(raw >> 8);
+		return InputFrame::Deserialize(bytes);
+	};
+	CHECK(withAxis(GamepadAxis::LeftX, -32767).HasValue());
+	CHECK(withAxis(GamepadAxis::RightY, 32767).HasValue());
+	CHECK_FALSE(withAxis(GamepadAxis::LeftX, -32768).HasValue());
+	CHECK_FALSE(withAxis(GamepadAxis::RightY, -32768).HasValue());
+	CHECK(withAxis(GamepadAxis::LeftTrigger, 0).HasValue());
+	CHECK(withAxis(GamepadAxis::RightTrigger, 32767).HasValue());
+	const Result<InputFrame> negativeTrigger = withAxis(GamepadAxis::LeftTrigger, -1);
+	REQUIRE_FALSE(negativeTrigger.HasValue());
+	CHECK(negativeTrigger.GetError().Message.find("LeftTrigger") != std::string::npos);
+	CHECK_FALSE(withAxis(GamepadAxis::RightTrigger, -32767).HasValue());
 
 	// Text: too many characters, invalid code points.
 	CHECK_FALSE(InputFrame::Deserialize(WithByte(empty, TextCountOffset, 17)).HasValue());

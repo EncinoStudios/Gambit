@@ -23,8 +23,17 @@ namespace Gambit
 
 	// Converts a device reading to fixed point, saturating instead of overflowing; NaN becomes 0.
 	[[nodiscard]] int32_t QuantizeToFixedPoint(double value) noexcept;
-	// Converts a gamepad axis in [-1, 1] to int16, saturating; NaN becomes 0.
+	// Converts a gamepad stick axis in [-1, 1] to int16 in [-GamepadAxisMaximum, GamepadAxisMaximum], saturating;
+	// NaN becomes 0.
 	[[nodiscard]] int16_t QuantizeGamepadAxis(float value) noexcept;
+	// Converts a trigger in [0, 1] to int16 in [0, GamepadAxisMaximum], saturating; NaN becomes 0.
+	[[nodiscard]] int16_t QuantizeGamepadTrigger(float value) noexcept;
+
+	// Whether the axis is a trigger (range [0, 1]) rather than a stick axis (range [-1, 1]).
+	[[nodiscard]] constexpr bool IsGamepadTrigger(GamepadAxis axis) noexcept
+	{
+		return axis == GamepadAxis::LeftTrigger || axis == GamepadAxis::RightTrigger;
+	}
 
 	// Whether a code point may be stored as typed text: a Unicode scalar value other than U+0000 (no surrogates,
 	// nothing beyond U+10FFFF).
@@ -127,11 +136,16 @@ namespace Gambit
 			return true;
 		}
 
+		// Whether the frame holds only values a device can produce: no key bits beyond the last key (or KeyCode::None),
+		// at most MaxTextCodepointsPerFrame valid code points, no state on a disconnected gamepad, no gamepad button
+		// bits beyond the last button, stick axes in [-GamepadAxisMaximum, GamepadAxisMaximum] and triggers in
+		// [0, GamepadAxisMaximum]. Every other field may hold any value of its type.
+		[[nodiscard]] Result<void> Validate() const;
+
 		// Binary form: a versioned header ("GBIF", format version) and the fixed little-endian layout of the frame.
 		// Frames inside an InputLog use the same layout without the header.
 		[[nodiscard]] Buffer Serialize() const;
-		// Rejects bad magic or version, truncated or trailing data, and values no frame can hold (key bits beyond the
-		// last key, more text than fits, invalid code points, state of a disconnected gamepad).
+		// Rejects bad magic or version, truncated or trailing data, and frames that fail Validate().
 		[[nodiscard]] static Result<InputFrame> Deserialize(BufferView bytes);
 
 		void Write(BinaryWriter& writer) const;

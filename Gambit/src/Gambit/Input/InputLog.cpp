@@ -36,12 +36,19 @@ namespace Gambit
 		{
 			return Error(std::format("input log: invalid simulation rate {} Hz", m_Header.SimulationHz));
 		}
+		for (size_t i = 0; i < m_Frames.size(); ++i)
+		{
+			if (Result<void> frame = m_Frames[i].Validate(); !frame)
+			{
+				return Error(std::format("input log: frame {}: {}", i, frame.GetError().Message));
+			}
+		}
 		return {};
 	}
 
 	Buffer InputLog::Serialize() const
 	{
-		GB_CORE_ASSERT(Validate().HasValue(), "serializing an input log with an invalid header");
+		GB_CORE_ASSERT(Validate().HasValue(), "serializing an input log that could not be loaded again");
 		BinaryWriter writer;
 		writer.WriteU32(Magic);
 		writer.WriteU16(InputLogFormatVersion);

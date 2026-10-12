@@ -122,7 +122,10 @@ namespace Gambit
 			}
 			for (size_t axis = 0; axis < GamepadAxisCount; ++axis)
 			{
-				gamepad.Axes[axis] = QuantizeGamepadAxis(state.Axes[axis]);
+				// Clamped to the axis' range even when the platform reports more, so the frame can always be recorded.
+				gamepad.Axes[axis] = IsGamepadTrigger(static_cast<GamepadAxis>(axis))
+					? QuantizeGamepadTrigger(state.Axes[axis])
+					: QuantizeGamepadAxis(state.Axes[axis]);
 			}
 		}
 

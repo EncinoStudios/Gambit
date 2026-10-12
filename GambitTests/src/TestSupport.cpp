@@ -33,6 +33,39 @@ namespace Gambit::Tests
 		return config;
 	}
 
+	namespace
+	{
+		LogConfig MakeCaptureConfig()
+		{
+			LogConfig config;
+			config.Console = false;
+			config.RingBufferCapacity = 256;
+			return config;
+		}
+	}
+
+	ScopedLogCapture::ScopedLogCapture()
+		: m_Init(MakeCaptureConfig())
+	{}
+
+	std::vector<LogEntry> ScopedLogCapture::GetEntries() const
+	{
+		const Ref<RingBufferSink> buffer = Log::GetRingBuffer();
+		return buffer != nullptr ? buffer->Snapshot() : std::vector<LogEntry>{};
+	}
+
+	bool ScopedLogCapture::Contains(LogLevel level, std::string_view text) const
+	{
+		for (const LogEntry& entry : GetEntries())
+		{
+			if (entry.Level == level && entry.Message.find(text) != std::string::npos)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	ScopedLogInit::ScopedLogInit(const LogConfig& config)
 	{
 		Log::Init(config);

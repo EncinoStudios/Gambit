@@ -41,11 +41,10 @@ namespace Gambit
 		std::filesystem::path resolved = std::filesystem::weakly_canonical(joined, error);
 		if (error)
 		{
-			// A file where a directory is expected ("file.txt/child") simply does not exist.
-			const bool missing = error == std::errc::not_a_directory || error == std::errc::no_such_file_or_directory;
+			// A file where a directory is expected ("file.txt/child") simply does not exist; a refused lookup is
+			// PermissionDenied, so the VFS reports it instead of falling through to an older mount.
 			return MakeFileError(
-				missing ? FileError::NotFound : FileError::Io,
-				std::format("cannot resolve '{}': {}", path, error.message()));
+				FileSystem::ClassifyError(error), std::format("cannot resolve '{}': {}", path, error.message()));
 		}
 
 		// Symbolic links are resolved by now, so a prefix test on whole path components proves confinement.
@@ -157,14 +156,21 @@ namespace Gambit
 		}
 
 		std::error_code error;
-		if (!std::filesystem::exists(std::filesystem::symlink_status(*resolved, error)))
+		const std::filesystem::file_status status = std::filesystem::symlink_status(*resolved, error);
+		if (status.type() != std::filesystem::file_type::not_found && error)
+		{
+			return MakeFileError(
+				FileSystem::ClassifyError(error), std::format("cannot access '{}': {}", path, error.message()));
+		}
+		if (!std::filesystem::exists(status))
 		{
 			return MakeFileError(FileError::NotFound, std::format("'{}' does not exist", path));
 		}
 		std::filesystem::remove(*resolved, error);
 		if (error)
 		{
-			return MakeFileError(FileError::Io, std::format("cannot remove '{}': {}", path, error.message()));
+			return MakeFileError(
+				FileSystem::ClassifyError(error), std::format("cannot remove '{}': {}", path, error.message()));
 		}
 		return {};
 	}

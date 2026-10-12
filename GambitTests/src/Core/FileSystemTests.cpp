@@ -5,10 +5,12 @@
 #include "Gambit/Core/FileSystem.h"
 
 #include <atomic>
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -133,7 +135,7 @@ TEST_CASE("Core: FileSystem write failures are reported and clean up")
 
 	const Result<void> noParent = FileSystem::WriteText(directory.GetPath() / "missing" / "file.txt", "x");
 	REQUIRE_FALSE(noParent.HasValue());
-	CHECK(HasFileError(noParent.GetError(), FileError::Io));
+	CHECK(HasFileError(noParent.GetError(), FileError::NotFound)); // the parent directory does not exist
 
 	const Result<void> noName = FileSystem::WriteText(directory.GetPath() / "dir" / "", "x");
 	REQUIRE_FALSE(noName.HasValue());
@@ -264,7 +266,7 @@ TEST_CASE("Core: FileSystem NormalizePath resolves segments")
 	CHECK(Normalized("a\\b/../c") == "a/c");
 	CHECK(Normalized("Assets/Meshes/Crate.glb") == "Assets/Meshes/Crate.glb");
 	CHECK(Normalized("Assets/My Files/crate (1).glb") == "Assets/My Files/crate (1).glb");
-	CHECK(Normalized("a/..b/.c/d..") == "a/..b/.c/d.."); // dots inside names are ordinary characters
+	CHECK(Normalized("a/..b/.c/d..e") == "a/..b/.c/d..e"); // dots inside names are ordinary characters
 	CHECK(Normalized("Ünï/cödé.txt") == "Ünï/cödé.txt");
 }
 
@@ -307,6 +309,114 @@ TEST_CASE("Core: FileSystem NormalizePath rejects escapes and unsafe characters"
 	CheckRejected("a/b\nc");
 	CheckRejected("a/\tb");
 }
+
+TEST_CASE("Core: FileSystem NormalizePath rejects names Windows cannot store")
+{
+	// Reserved device names in any case, with or without extensions, anywhere in the path.
+	for (const char* path : { "CON",         "con",         "Con.txt",
+	                          "PRN",         "AUX",         "NUL",
+	                          "nul.tar.gz",  "nul .txt",    "Assets/aux/x.png",
+	                          "a\\Nul\\b",   "COM0",        "COM1",
+	                          "com9.log",    "LPT0",        "lpt5",
+	                          "LPT9.txt",    "COM\xC2\xB9", "lpt\xC2\xB2.txt",
+	                          "COM\xC2\xB3", "/con",        "C:/x/prn.txt" })
+	{
+		CheckRejected(path);
+	}
+	// Trailing dots and spaces, which Windows strips (so the name would denote another file there).
+	for (const char* path : { "file.", "dir./x", "name ", "a/b /c", "...", "a/..../b", "x. ", "trailing.txt." })
+	{
+		CheckRejected(path);
+	}
+
+	// Names that merely contain or resemble a device name are fine.
+	CHECK(Normalized("CONSOLE/conf.json") == "CONSOLE/conf.json");
+	CHECK(Normalized("con_1/null/auxiliary/nullable.txt") == "con_1/null/auxiliary/nullable.txt");
+	CHECK(Normalized("COM10/LPT/COM/COMa/LPT1x") == "COM10/LPT/COM/COMa/LPT1x");
+	CHECK(Normalized("a.con/.nul/x CON") == "a.con/.nul/x CON");
+	CHECK(Normalized("COM\xC2\xB4") == "COM\xC2\xB4"); // U+00B4 is not one of the superscript port digits
+	CHECK(Normalized(" leading/.hidden") == " leading/.hidden");
+
+	CHECK(FileSystem::IsReservedDeviceName("cOm7"));
+	CHECK(FileSystem::IsReservedDeviceName("AUX.h"));
+	CHECK_FALSE(FileSystem::IsReservedDeviceName(""));
+	CHECK_FALSE(FileSystem::IsReservedDeviceName("COM"));
+	CHECK_FALSE(FileSystem::IsReservedDeviceName("CONIN"));
+}
+
+TEST_CASE("Core: FileSystem classifies operating system errors")
+{
+	const auto classify = [](std::errc code) { return FileSystem::ClassifyError(std::make_error_code(code)); };
+	CHECK(classify(std::errc::no_such_file_or_directory) == FileError::NotFound);
+	CHECK(classify(std::errc::not_a_directory) == FileError::NotFound);
+	CHECK(classify(std::errc::permission_denied) == FileError::PermissionDenied);
+	CHECK(classify(std::errc::operation_not_permitted) == FileError::PermissionDenied);
+	CHECK(classify(std::errc::read_only_file_system) == FileError::ReadOnly);
+	CHECK(classify(std::errc::io_error) == FileError::Io);
+	CHECK(classify(std::errc::no_space_on_device) == FileError::Io);
+	CHECK(classify(std::errc::is_a_directory) == FileError::Io);
+	// Native error codes compare through their error condition, as std::filesystem reports them.
+	CHECK(FileSystem::ClassifyError(std::error_code(EACCES, std::generic_category())) == FileError::PermissionDenied);
+}
+
+// Windows ACLs cannot be set through std::filesystem::permissions, so refused access is exercised on POSIX only.
+#if !defined(_WIN32)
+TEST_CASE("Core: FileSystem reports refused access as PermissionDenied, not NotFound")
+{
+	Tests::ScopedTempDirectory directory;
+	const fs::path locked = directory.GetPath() / "locked";
+	REQUIRE(FileSystem::CreateDirectories(locked).HasValue());
+	REQUIRE(FileSystem::WriteText(locked / "file.txt", "secret").HasValue());
+	const fs::path unreadable = directory.GetPath() / "unreadable.txt";
+	REQUIRE(FileSystem::WriteText(unreadable, "secret").HasValue());
+
+	// Restores the permissions however the test ends, so the temporary directory can be removed.
+	struct Restore
+	{
+		fs::path Locked;
+		fs::path Unreadable;
+		~Restore()
+		{
+			std::error_code ignored;
+			fs::permissions(Locked, fs::perms::owner_all, ignored);
+			fs::permissions(Unreadable, fs::perms::owner_read | fs::perms::owner_write, ignored);
+		}
+	} restore{ locked, unreadable };
+	std::error_code error;
+	fs::permissions(unreadable, fs::perms::none, error);
+	REQUIRE_FALSE(error);
+	fs::permissions(locked, fs::perms::none, error);
+	REQUIRE_FALSE(error);
+
+	if (std::ifstream(unreadable).good())
+	{
+		// Privileged users (root, CAP_DAC_OVERRIDE) bypass permissions: nothing can be refused here. CI runs
+		// unprivileged.
+		MESSAGE("running with privileges that bypass file permissions; refused access cannot be provoked");
+		return;
+	}
+
+	const Result<Buffer> file = FileSystem::ReadBinary(unreadable);
+	REQUIRE_FALSE(file.HasValue());
+	CHECK(HasFileError(file.GetError(), FileError::PermissionDenied));
+
+	const Result<Buffer> inLocked = FileSystem::ReadBinary(locked / "file.txt");
+	REQUIRE_FALSE(inLocked.HasValue());
+	CHECK(HasFileError(inLocked.GetError(), FileError::PermissionDenied));
+
+	const Result<std::vector<DirectoryEntry>> listing = FileSystem::ListDirectory(locked, false);
+	REQUIRE_FALSE(listing.HasValue());
+	CHECK(HasFileError(listing.GetError(), FileError::PermissionDenied));
+
+	const Result<void> write = FileSystem::WriteText(locked / "new.txt", "x");
+	REQUIRE_FALSE(write.HasValue());
+	CHECK(HasFileError(write.GetError(), FileError::PermissionDenied));
+
+	const Result<void> create = FileSystem::CreateDirectories(locked / "sub" / "dir");
+	REQUIRE_FALSE(create.HasValue());
+	CHECK(HasFileError(create.GetError(), FileError::PermissionDenied));
+}
+#endif
 
 TEST_CASE("Core: FileSystem UTF-8 conversions use forward slashes")
 {

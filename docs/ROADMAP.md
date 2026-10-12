@@ -14,7 +14,7 @@ A task is `done` only when it builds warning-free, all tests pass, it passed cod
 | T03 | Platform: Application loop, Window (GLFW), Input devices, InputFrame/InputActions/InputLog | done |
 
 ## M2 — ECS, reflection, serialization, automation core
-| T04 | TypeRegistry reflection, World/Entity on EnTT, core components, system scheduler, command buffer, state hash | todo |
+| T04 | TypeRegistry reflection, World/Entity on EnTT, core components, system scheduler, command buffer, state hash | done |
 | T05 | JSON scene/prefab serialization, Project files, AssetManager + .meta, DataTable (CSV) | todo |
 | T06 | CommandRegistry + EditorContext + undo/redo; `gambit` CLI skeleton; comments system | todo |
 

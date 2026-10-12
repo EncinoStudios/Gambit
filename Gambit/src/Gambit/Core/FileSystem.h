@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace Gambit
@@ -15,10 +16,11 @@ namespace Gambit
 	enum class FileError : int
 	{
 		Unspecified = 0,
-		NotFound,    // the file or directory does not exist
-		InvalidPath, // malformed, escaping the root, or of the wrong kind (a directory where a file was expected)
-		ReadOnly,    // the operation needs a writable location
-		Io           // the operating system or the storage failed
+		NotFound,        // the file or directory does not exist
+		InvalidPath,     // malformed, escaping the root, or of the wrong kind (a directory where a file was expected)
+		ReadOnly,        // the operation needs a writable location
+		Io,              // the operating system or the storage failed
+		PermissionDenied // the operating system refused access (file or directory permissions)
 	};
 
 	[[nodiscard]] inline Error MakeFileError(FileError code, std::string message)
@@ -43,7 +45,14 @@ namespace Gambit
 	// std::filesystem paths. For engine content use the VFS (D-014), which is built on top of this.
 	namespace FileSystem
 	{
-		// Reads a whole file. NotFound when it does not exist, InvalidPath for a directory.
+		// The FileError for an operating system error: NotFound for a missing file or directory (or a file where a
+		// directory is expected), PermissionDenied when access was refused, ReadOnly for a read-only file system and
+		// Io for everything else. Every FileSystem and DirectoryMount failure is classified this way, so a refused
+		// read never passes for a missing file.
+		[[nodiscard]] FileError ClassifyError(const std::error_code& error) noexcept;
+
+		// Reads a whole file. NotFound when it does not exist, InvalidPath for a directory, PermissionDenied when it
+		// may not be read.
 		[[nodiscard]] Result<Buffer> ReadBinary(const std::filesystem::path& path);
 
 		// Reads a whole file as text. A leading UTF-8 byte order mark is dropped; line endings are left alone.
@@ -73,8 +82,14 @@ namespace Gambit
 		// no trailing slash. The result of a relative path is relative and may be empty (the root). A path starting
 		// with '/' or a drive ("C:/") stays absolute. Fails with InvalidPath when ".." would climb above the first
 		// segment (the "root" of a relative path) or above the absolute root, or when a segment contains a NUL, another
-		// control character or ':' (alternate data streams, drive tricks).
+		// control character or ':' (alternate data streams, drive tricks). Names Windows cannot store are rejected on
+		// every platform, so content stays portable: segments ending in '.' or ' ' and the reserved device names
+		// (CON, PRN, AUX, NUL, COM0-9, LPT0-9 and COM/LPT with a superscript 1-3; any case, with or without an
+		// extension, e.g. "nul.txt").
 		[[nodiscard]] Result<std::string> NormalizePath(std::string_view path);
+
+		// Whether `segment` (one path component) is a reserved Windows device name in the sense of NormalizePath.
+		[[nodiscard]] bool IsReservedDeviceName(std::string_view segment) noexcept;
 
 		// True for paths NormalizePath keeps absolute ("/x", "C:/x").
 		[[nodiscard]] bool IsAbsolutePath(std::string_view path) noexcept;

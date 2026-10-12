@@ -968,7 +968,19 @@ namespace Gambit
 		{
 			return false;
 		}
+		try
+		{
+			return BeginFrameUnguarded();
+		}
+		catch (const vk::SystemError& error)
+		{
+			OnVulkanException("BeginFrame", error);
+			return false;
+		}
+	}
 
+	bool VulkanGraphicsDevice::BeginFrameUnguarded()
+	{
 		m_FrameSlot = static_cast<uint32_t>(m_FrameCount % m_Specification.FramesInFlight);
 		if (m_FrameQueryPending[m_FrameSlot])
 		{
@@ -1041,7 +1053,19 @@ namespace Gambit
 			return !m_DeviceLost;
 		}
 		m_InFrame = false;
+		try
+		{
+			PresentUnguarded();
+		}
+		catch (const vk::SystemError& error)
+		{
+			OnVulkanException("Present", error);
+		}
+		return !m_DeviceLost;
+	}
 
+	void VulkanGraphicsDevice::PresentUnguarded()
+	{
 		if (!m_Specification.Headless)
 		{
 			m_VulkanNvrhiDevice->queueSignalSemaphore(
@@ -1077,7 +1101,6 @@ namespace Gambit
 		m_FrameQueryPending[m_FrameSlot] = true;
 		m_NvrhiDevice->runGarbageCollection();
 		++m_FrameCount;
-		return !m_DeviceLost;
 	}
 
 	nvrhi::ITexture* VulkanGraphicsDevice::GetCurrentBackBuffer() const
@@ -1124,11 +1147,20 @@ namespace Gambit
 
 	void VulkanGraphicsDevice::WaitIdle()
 	{
-		if (!m_NvrhiDevice->waitForIdle())
+		// Also called by the destructor: it must not throw.
+		try
 		{
-			MarkDeviceLost();
+			if (!m_NvrhiDevice->waitForIdle())
+			{
+				MarkDeviceLost();
+				return; // the garbage collection would query the lost device
+			}
+			m_NvrhiDevice->runGarbageCollection();
 		}
-		m_NvrhiDevice->runGarbageCollection();
+		catch (const vk::SystemError& error)
+		{
+			OnVulkanException("WaitIdle", error);
+		}
 	}
 
 	void VulkanGraphicsDevice::MarkDeviceLost()
@@ -1138,5 +1170,16 @@ namespace Gambit
 			GB_CORE_CRITICAL("The graphics device was lost; nothing more can be rendered");
 		}
 		m_DeviceLost = true;
+	}
+
+	void VulkanGraphicsDevice::OnVulkanException(std::string_view operation, const vk::SystemError& error)
+	{
+		// A failed fence or semaphore wait leaves the frame bookkeeping in an unknown state, so any Vulkan error here
+		// ends rendering like a lost device does.
+		if (error.code() != vk::make_error_code(vk::Result::eErrorDeviceLost))
+		{
+			GB_CORE_ERROR("{}: a Vulkan call failed: {}", operation, error.what());
+		}
+		MarkDeviceLost();
 	}
 }

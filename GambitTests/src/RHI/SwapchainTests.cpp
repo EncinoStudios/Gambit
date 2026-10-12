@@ -92,11 +92,14 @@ TEST_CASE(
 	CHECK(RenderFrame(*device, nvrhi::Color(1.0f, 1.0f, 0.0f, 1.0f)) == glm::vec4(1.0f, 1.0f, 0.0f, 1.0f));
 	CHECK(device->GetBackBufferSize() == resized);
 
-	// So does a new VSync setting.
+	// So does a new VSync setting. Its first frame renders nothing: Present must still move the fresh image out of its
+	// undefined initial layout (the validation layer reports a presented image in the wrong layout).
 	device->SetVSync(true);
-	CHECK(RenderFrame(*device, nvrhi::Color(0.0f, 1.0f, 0.0f, 1.0f)) == glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+	REQUIRE(device->BeginFrame());
+	CHECK(device->Present());
 	CHECK(device->IsVSync());
-	CHECK(device->GetFrameCount() == 5);
+	CHECK(RenderFrame(*device, nvrhi::Color(0.0f, 1.0f, 0.0f, 1.0f)) == glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+	CHECK(device->GetFrameCount() == 6);
 
 	device->WaitIdle();
 	CHECK(device->GetValidationErrorCount() == 0);

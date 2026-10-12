@@ -325,6 +325,10 @@ namespace Gambit
 		ImageCompareResult result;
 		result.PixelCount = uint64_t(actual.GetWidth()) * actual.GetHeight();
 		result.Diff = Image(actual.GetWidth(), actual.GetHeight(), ImageFormat::RGBA8);
+		// Two 8-bit images differ by whole levels. Their normalized difference is snapped to n / 255 because the float
+		// difference of two levels is not always exact (128 / 255 - 126 / 255 > 2.0f / 255), which would make a
+		// tolerance of n levels reject some differences of exactly n levels.
+		const bool wholeLevels = actual.GetFormat() == ImageFormat::RGBA8 && expected.GetFormat() == ImageFormat::RGBA8;
 		double differenceSum = 0.0;
 		for (uint32_t y = 0; y < actual.GetHeight(); ++y)
 		{
@@ -335,7 +339,11 @@ namespace Gambit
 				float pixelDifference = 0.0f;
 				for (int c = 0; c < 4; ++c)
 				{
-					const float difference = ChannelDifference(a[c], b[c]);
+					float difference = ChannelDifference(a[c], b[c]);
+					if (wholeLevels)
+					{
+						difference = std::round(difference * 255.0f) / 255.0f;
+					}
 					pixelDifference = std::max(pixelDifference, difference);
 					differenceSum += std::isinf(difference) ? 1.0 : double(difference);
 				}

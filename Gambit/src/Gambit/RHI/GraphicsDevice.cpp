@@ -4,6 +4,8 @@
 
 #include <nvrhi/utils.h>
 
+#include <exception>
+
 namespace Gambit
 {
 	namespace
@@ -104,6 +106,87 @@ namespace Gambit
 			device.setEventQuery(query, nvrhi::CommandQueue::Graphics);
 			device.waitEventQuery(query);
 		}
+
+		// Copies one mip level (of size `size`) of one slice of `texture` into an Image through a staging texture,
+		// waiting for the GPU. Errors say what failed, without naming the texture.
+		Result<Image> CopyToImage(
+			nvrhi::IDevice& device, nvrhi::ITexture* texture, const ReadbackLayout& layout, uint32_t mipLevel,
+			uint32_t arraySlice, glm::uvec2 size)
+		{
+			const nvrhi::TextureDesc stagingDesc = nvrhi::TextureDesc()
+													   .setWidth(size.x)
+													   .setHeight(size.y)
+													   .setFormat(texture->getDesc().format)
+													   .setDebugName("Readback staging texture");
+			const nvrhi::StagingTextureHandle staging =
+				device.createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+			const nvrhi::CommandListHandle commandList = device.createCommandList();
+			if (!staging || !commandList)
+			{
+				return Error("NVRHI could not create the staging resources");
+			}
+
+			const nvrhi::TextureSlice source = nvrhi::TextureSlice()
+												   .setMipLevel(mipLevel)
+												   .setArraySlice(arraySlice)
+												   .setWidth(size.x)
+												   .setHeight(size.y)
+												   .setDepth(1);
+			const nvrhi::TextureSlice destination =
+				nvrhi::TextureSlice().setWidth(size.x).setHeight(size.y).setDepth(1);
+			commandList->open();
+			commandList->copyTexture(staging, destination, texture, source);
+			commandList->close();
+			device.executeCommandList(commandList);
+			WaitForGraphicsQueue(device);
+
+			size_t rowPitch = 0;
+			const auto* mapped = static_cast<const std::byte*>(
+				device.mapStagingTexture(staging, destination, nvrhi::CpuAccessMode::Read, &rowPitch));
+			if (mapped == nullptr)
+			{
+				return Error("the staging texture cannot be mapped");
+			}
+			Image image(size.x, size.y, layout.Format);
+			for (uint32_t y = 0; y < size.y; ++y)
+			{
+				ExpandRow(layout, mapped + y * rowPitch, image.GetRow(y), size.x);
+			}
+			device.unmapStagingTexture(staging);
+			return image;
+		}
+
+		// Copies `size` bytes from `offset` of `buffer` to the CPU through a staging buffer, waiting for the GPU.
+		// Errors say what failed, without naming the buffer.
+		Result<Buffer> CopyToBuffer(nvrhi::IDevice& device, nvrhi::IBuffer* buffer, uint64_t offset, uint64_t size)
+		{
+			const nvrhi::BufferDesc stagingDesc = nvrhi::BufferDesc()
+													  .setByteSize(size)
+													  .setCpuAccess(nvrhi::CpuAccessMode::Read)
+													  .setInitialState(nvrhi::ResourceStates::CopyDest)
+													  .setKeepInitialState(true)
+													  .setDebugName("Readback staging buffer");
+			const nvrhi::BufferHandle staging = device.createBuffer(stagingDesc);
+			const nvrhi::CommandListHandle commandList = device.createCommandList();
+			if (!staging || !commandList)
+			{
+				return Error("NVRHI could not create the staging resources");
+			}
+			commandList->open();
+			commandList->copyBuffer(staging, 0, buffer, offset, size);
+			commandList->close();
+			device.executeCommandList(commandList);
+			WaitForGraphicsQueue(device);
+
+			const void* mapped = device.mapBuffer(staging, nvrhi::CpuAccessMode::Read);
+			if (mapped == nullptr)
+			{
+				return Error("the staging buffer cannot be mapped");
+			}
+			Buffer bytes = Buffer::Copy(mapped, static_cast<size_t>(size));
+			device.unmapBuffer(staging);
+			return bytes;
+		}
 	}
 
 	std::string_view ToString(GpuType type) noexcept
@@ -159,49 +242,30 @@ namespace Gambit
 				nvrhi::utils::FormatToString(desc.format)));
 		}
 
-		nvrhi::IDevice& device = *GetNvrhiDevice();
 		const uint32_t width = std::max(desc.width >> mipLevel, 1u);
 		const uint32_t height = std::max(desc.height >> mipLevel, 1u);
-		const nvrhi::TextureDesc stagingDesc = nvrhi::TextureDesc()
-												   .setWidth(width)
-												   .setHeight(height)
-												   .setFormat(desc.format)
-												   .setDebugName("Readback staging texture");
-		const nvrhi::StagingTextureHandle staging =
-			device.createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
-		const nvrhi::CommandListHandle commandList = device.createCommandList();
-		if (!staging || !commandList)
+		if (width > Image::MaxDimension || height > Image::MaxDimension)
 		{
-			return Error(
-				std::format("cannot read back texture '{}': NVRHI could not create the staging resources", name));
+			return Error(std::format(
+				"cannot read back mip {} of texture '{}': {}x{} is larger than an Image can be ({} in each direction)",
+				mipLevel, name, width, height, Image::MaxDimension));
 		}
-
-		const nvrhi::TextureSlice source = nvrhi::TextureSlice()
-											   .setMipLevel(mipLevel)
-											   .setArraySlice(arraySlice)
-											   .setWidth(width)
-											   .setHeight(height)
-											   .setDepth(1);
-		const nvrhi::TextureSlice destination = nvrhi::TextureSlice().setWidth(width).setHeight(height).setDepth(1);
-		commandList->open();
-		commandList->copyTexture(staging, destination, texture, source);
-		commandList->close();
-		device.executeCommandList(commandList);
-		WaitForGraphicsQueue(device);
-
-		size_t rowPitch = 0;
-		const auto* mapped = static_cast<const std::byte*>(
-			device.mapStagingTexture(staging, destination, nvrhi::CpuAccessMode::Read, &rowPitch));
-		if (mapped == nullptr)
+		// NVRHI's waits report a lost device with Vulkan-Hpp exceptions.
+		Result<Image> image = [&]() -> Result<Image> {
+			try
+			{
+				return CopyToImage(
+					*GetNvrhiDevice(), texture, *layout, mipLevel, arraySlice, glm::uvec2(width, height));
+			}
+			catch (const std::exception& error)
+			{
+				return Error(error.what());
+			}
+		}();
+		if (!image)
 		{
-			return Error(std::format("cannot read back texture '{}': the staging texture cannot be mapped", name));
+			return Error(std::format("cannot read back texture '{}': {}", name, image.GetError().Message));
 		}
-		Image image(width, height, layout->Format);
-		for (uint32_t y = 0; y < height; ++y)
-		{
-			ExpandRow(*layout, mapped + y * rowPitch, image.GetRow(y), width);
-		}
-		device.unmapStagingTexture(staging);
 		return image;
 	}
 
@@ -219,34 +283,21 @@ namespace Gambit
 				desc.byteSize));
 		}
 
-		nvrhi::IDevice& device = *GetNvrhiDevice();
-		const nvrhi::BufferDesc stagingDesc = nvrhi::BufferDesc()
-												  .setByteSize(size)
-												  .setCpuAccess(nvrhi::CpuAccessMode::Read)
-												  .setInitialState(nvrhi::ResourceStates::CopyDest)
-												  .setKeepInitialState(true)
-												  .setDebugName("Readback staging buffer");
-		const nvrhi::BufferHandle staging = device.createBuffer(stagingDesc);
-		const nvrhi::CommandListHandle commandList = device.createCommandList();
-		if (!staging || !commandList)
+		// NVRHI's waits report a lost device with Vulkan-Hpp exceptions.
+		Result<Buffer> bytes = [&]() -> Result<Buffer> {
+			try
+			{
+				return CopyToBuffer(*GetNvrhiDevice(), buffer, offset, size);
+			}
+			catch (const std::exception& error)
+			{
+				return Error(error.what());
+			}
+		}();
+		if (!bytes)
 		{
-			return Error(std::format(
-				"cannot read back buffer '{}': NVRHI could not create the staging resources", desc.debugName));
+			return Error(std::format("cannot read back buffer '{}': {}", desc.debugName, bytes.GetError().Message));
 		}
-		commandList->open();
-		commandList->copyBuffer(staging, 0, buffer, offset, size);
-		commandList->close();
-		device.executeCommandList(commandList);
-		WaitForGraphicsQueue(device);
-
-		const void* mapped = device.mapBuffer(staging, nvrhi::CpuAccessMode::Read);
-		if (mapped == nullptr)
-		{
-			return Error(
-				std::format("cannot read back buffer '{}': the staging buffer cannot be mapped", desc.debugName));
-		}
-		Buffer bytes = Buffer::Copy(mapped, static_cast<size_t>(size));
-		device.unmapBuffer(staging);
 		return bytes;
 	}
 }

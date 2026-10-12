@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Gambit
@@ -110,6 +111,12 @@ namespace Gambit
 		SetBackBuffers(std::vector<nvrhi::TextureHandle> textures, nvrhi::Format format, glm::uvec2 size);
 		void ReleaseBackBuffers();
 		void MarkDeviceLost();
+
+		// The bodies of BeginFrame and Present. NVRHI's waits and garbage collection report a lost device (or a failed
+		// wait) with Vulkan-Hpp exceptions, which the public functions turn into a lost device.
+		[[nodiscard]] bool BeginFrameUnguarded();
+		void PresentUnguarded();
+		void OnVulkanException(std::string_view operation, const vk::SystemError& error);
 
 		GraphicsDeviceSpecification m_Specification;
 		Window* m_Window;

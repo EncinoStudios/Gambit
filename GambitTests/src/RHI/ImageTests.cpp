@@ -239,6 +239,37 @@ TEST_CASE("RHI: ImageCompare counts the pixels beyond the tolerance")
 	CHECK_FALSE(ImageCompare(Image(), expected, tolerance, 1.0).HasValue());
 }
 
+TEST_CASE("RHI: ImageCompare accepts exactly the tolerated number of 8-bit levels")
+{
+	// Every level against the level two (and three) above it. In float, some differences of two levels come out a
+	// little above 2.0f / 255 (128 / 255 - 126 / 255, for example); they must still count as two levels.
+	constexpr uint32_t Width = 253;
+	Image expected(Width, 1, ImageFormat::RGBA8);
+	Image twoLevelsUp(Width, 1, ImageFormat::RGBA8);
+	Image threeLevelsUp(Width, 1, ImageFormat::RGBA8);
+	for (uint32_t x = 0; x < Width; ++x)
+	{
+		for (uint32_t c = 0; c < 4; ++c)
+		{
+			expected.GetRow(0)[x * 4 + c] = std::byte(x);
+			twoLevelsUp.GetRow(0)[x * 4 + c] = std::byte(x + 2);
+			threeLevelsUp.GetRow(0)[x * 4 + c] = std::byte(x + 3);
+		}
+	}
+
+	const float tolerance = 2.0f / 255.0f;
+	const Result<ImageCompareResult> two = ImageCompare(twoLevelsUp, expected, tolerance, 0.0);
+	REQUIRE(two.HasValue());
+	CHECK(two->Passed);
+	CHECK(two->BadPixelCount == 0);
+	CHECK(two->MaxDifference == tolerance);
+
+	const Result<ImageCompareResult> three = ImageCompare(threeLevelsUp, expected, tolerance, 0.0);
+	REQUIRE(three.HasValue());
+	CHECK_FALSE(three->Passed);
+	CHECK(three->BadPixelCount == Width);
+}
+
 TEST_CASE("RHI: ImageCompare works across formats and treats NaN as different")
 {
 	const Image rgba8 = MakePattern(4, 4);

@@ -27,8 +27,9 @@ namespace Gambit::Tests
 
 	// Compares `image` with the golden image GambitTests/Golden/<name>.png and fails the current test (doctest CHECK)
 	// on a mismatch or a missing golden; then <name>.actual.png and <name>.diff.png are written to build/test-output/
-	// to look at. With GB_UPDATE_GOLDEN=1 the image is written as the new golden instead and the test fails once,
-	// asking for a review (as for every regenerated reference, AGENTS.md section 4).
+	// to look at (each check first removes those of an earlier run). With GB_UPDATE_GOLDEN=1 the image is written as
+	// the new golden instead and the test fails once, asking for a review (as for every regenerated reference,
+	// AGENTS.md section 4).
 	void CheckGolden(std::string_view name, const Image& image, const GoldenOptions& options = {});
 
 	// Reads `texture` back (mip 0, slice 0) and checks it with CheckGolden.

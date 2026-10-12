@@ -9,11 +9,30 @@
 
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 namespace Gambit::Tests
 {
 	namespace
 	{
+		std::filesystem::path GetActualPath(std::string_view name)
+		{
+			return std::filesystem::path(GB_TEST_OUTPUT_DIR) / (std::string(name) + ".actual.png");
+		}
+
+		std::filesystem::path GetDiffPath(std::string_view name)
+		{
+			return std::filesystem::path(GB_TEST_OUTPUT_DIR) / (std::string(name) + ".diff.png");
+		}
+
+		// The images an earlier failed run left must not be mistaken for this run's.
+		void RemoveFailureOutput(std::string_view name)
+		{
+			std::error_code ignored;
+			std::filesystem::remove(GetActualPath(name), ignored);
+			std::filesystem::remove(GetDiffPath(name), ignored);
+		}
+
 		// Writes the actual and diff images of a failed comparison next to each other for inspection.
 		void WriteFailureOutput(std::string_view name, const Image& actual, const Image* diff)
 		{
@@ -23,14 +42,14 @@ namespace Gambit::Tests
 				MESSAGE("cannot create ", FileSystem::ToUtf8(directory));
 				return;
 			}
-			const std::filesystem::path actualPath = directory / (std::string(name) + ".actual.png");
+			const std::filesystem::path actualPath = GetActualPath(name);
 			if (const Result<void> saved = SavePng(actual, actualPath); saved)
 			{
 				MESSAGE("actual image: ", FileSystem::ToUtf8(actualPath));
 			}
 			if (diff != nullptr)
 			{
-				const std::filesystem::path diffPath = directory / (std::string(name) + ".diff.png");
+				const std::filesystem::path diffPath = GetDiffPath(name);
 				if (const Result<void> saved = SavePng(*diff, diffPath); saved)
 				{
 					MESSAGE("difference image: ", FileSystem::ToUtf8(diffPath));
@@ -42,6 +61,7 @@ namespace Gambit::Tests
 	void CheckGolden(std::string_view name, const Image& image, const GoldenOptions& options)
 	{
 		REQUIRE_FALSE(image.IsEmpty());
+		RemoveFailureOutput(name);
 		const Image actual = ConvertImage(image, ImageFormat::RGBA8, options.FloatToRgba8);
 		const std::filesystem::path goldenPath =
 			std::filesystem::path(GB_TEST_GOLDEN_DIR) / (std::string(name) + ".png");

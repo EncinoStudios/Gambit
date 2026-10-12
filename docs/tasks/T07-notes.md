@@ -54,7 +54,9 @@ independentBlend, textureCompressionBC, shaderStorageImageWriteWithoutFormat, sh
   engine compile `vulkan.hpp` identically (otherwise an ODR violation).
 - **Exceptions.** NVRHI builds `vulkan.hpp` with exceptions, so the engine must too. Setup code uses the enhanced API
   and `GraphicsDevice::Create` converts `vk::SystemError` into an `Error`; per-frame calls (acquire, present) use the
-  non-throwing overloads.
+  non-throwing overloads. NVRHI's own waits and garbage collection throw `vk::DeviceLostError` on a lost device, so
+  `BeginFrame`, `Present` and `WaitIdle` catch `vk::SystemError` and mark the device lost, and the readbacks return an
+  `Error` (review fix).
 - **Frames.** One NVRHI event query per frame slot throttles the CPU (`FramesInFlight`). Acquire semaphores are per frame
   slot (reused only after that slot's frame finished), present semaphores per swap-chain image (reused when the image is
   acquired again), the scheme recommended for swap-chain semaphore reuse. Waiting for the device does not cover the

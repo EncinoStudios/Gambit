@@ -177,3 +177,26 @@ rifle,30,30,true,"The ""Big"" Rifle"
 - Saving writes floats with a decimal point (`30.0`), so a column of whole numbers stays a float column.
 
 `DataRef` components (`{ "Table": "0x...", "RowId": "pistol" }`) point at a row of a table by the table's handle.
+
+## Comment threads
+
+`Comments/0x5C9A1D2E7B34F086.json` (D-052, D-056), one file per conversation between people and agents; created and changed by
+`comment.*` commands (`docs/guides/Automation.md`), never part of exports:
+
+```json
+{
+  "Version": 1,
+  "Id": "0x5C9A1D2E7B34F086",
+  "Target": { "Kind": "Entity", "Scene": "Scenes/Main.gscene", "Entity": "0xC984D67C924C9E8C" },
+  "Author": "claude",
+  "Status": "Open",
+  "Created": "2026-03-14T09:26:53Z",
+  "Updated": "2026-03-14T09:30:02Z",
+  "Messages": [ { "Author": "claude", "Text": "Should the hat be a prefab?", "Timestamp": "2026-03-14T09:26:53Z" } ]
+}
+```
+
+`Target.Kind` is `Entity` (`Scene`, `Entity`), `Component` (+ `Component`), `Asset` (`Asset` path and/or `Handle`), `File` (`File`,
+optional `Line` from 1), `Feature` (`Feature`, a tag of up to 64 characters) or `Position` (`Scene`, `Position` as `[x, y, z]`).
+`Status` is `Open` or `Resolved`. The file name is the `Id`; a file that is not a valid thread is reported as a warning
+when the project opens and left alone.

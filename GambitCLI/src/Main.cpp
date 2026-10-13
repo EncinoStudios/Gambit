@@ -1,3 +1,4 @@
+#include "Cli/AutomationCommands.h"
 #include "Cli/CommandDispatcher.h"
 
 #include "Gambit/Core/Log.h"
@@ -15,11 +16,12 @@ int main(int argc, char** argv)
 	LogConfig logConfig;
 	logConfig.Level = LogLevel::Warn;
 	logConfig.ConsoleTarget = ConsoleStream::StdErr;
-	logConfig.RingBufferCapacity = 0;
+	logConfig.RingBufferCapacity = 2048; // log.read in a batch
 	Log::Init(logConfig);
 
 	Cli::CommandDispatcher dispatcher("gambit");
 	Cli::RegisterBuiltinCommands(dispatcher);
+	Cli::RegisterAutomationCommands(dispatcher);
 
 	int exitCode = Cli::ExitFailure;
 	try

@@ -406,3 +406,37 @@ TEST_CASE("Asset: column type names")
 	CHECK(DataTable::FormatValue(DataColumnType::Asset, FieldValue(UUID(1))) == "0x0000000000000001");
 	CHECK(*DataTable::ParseValue(DataColumnType::Bool, "False") == FieldValue(false));
 }
+
+TEST_CASE("Asset: rows can be inserted at a position, which undoing a removal needs")
+{
+	const Ref<DataTable> table = ParseOk("Id,Damage:float,Name\na,1,A\nb,2,B\nc,3,C\n");
+	CHECK(table->FindRowIndex("a") == size_t{ 0 });
+	CHECK(table->FindRowIndex("c") == size_t{ 2 });
+	CHECK_FALSE(table->FindRowIndex("nope").has_value());
+
+	const std::vector<FieldValue> values = { FieldValue(7.5), FieldValue(std::string("X")) };
+	REQUIRE(table->InsertRow(1, "x", values).HasValue());
+	REQUIRE(table->InsertRow(0, "first").HasValue());
+	REQUIRE(table->InsertRow(100, "last").HasValue()); // beyond the end: appended
+	CHECK(table->GetRowCount() == 6);
+	std::string order;
+	for (const DataRow& row : table->GetRows())
+	{
+		order += row.Id + ",";
+	}
+	CHECK(order == "first,a,x,b,c,last,");
+	CHECK(table->FindRowIndex("x") == size_t{ 2 });
+	CHECK(*table->GetValue("x", "Damage") == FieldValue(7.5)); // the index follows the rows
+	CHECK(*table->GetValue("c", "Damage") == FieldValue(3.0));
+
+	// Removing a row and putting it back where it was restores the file text.
+	const std::string before = table->ToCsv();
+	const size_t position = *table->FindRowIndex("b");
+	const DataRow removed = *table->GetRow("b");
+	REQUIRE(table->RemoveRow("b").HasValue());
+	REQUIRE(table->InsertRow(position, "b", std::span<const FieldValue>(removed.Values).subspan(1)).HasValue());
+	CHECK(table->ToCsv() == before);
+
+	CHECK_FALSE(table->InsertRow(0, "a").HasValue());
+	CHECK_FALSE(table->InsertRow(0, "").HasValue());
+}

@@ -248,3 +248,40 @@ synchronization2, dynamic rendering required; shaders target SPIR-V for vulkan1.
 **D-020 Simulation start.** Every simulation entry point (editor play, `sim.run`, Lua tests, runtime scene load,
 replays) calls `World::BeginSimulation(seed)`: RNG reseeded from the scene seed, tick and time zeroed, events
 cleared — so a scene played from the editor and the same scene loaded from disk produce identical hashes.
+
+**D-053 Command model and CLI (T06).** A command is a `CommandInfo` (dotted name, summary, argument schema in the JSON
+Schema subset of MCP tools, flags `Mutating`/`Undoable`/`RequiresProject`/`RequiresScene`/`EditorOnly`/`WritesFiles`) and a
+handler `(EditorContext&, const Json&) -> CommandResult`. `CommandRegistry::Execute` validates the arguments before the
+handler (unknown, missing, wrong type, enum, range; defaults applied), checks the flags' preconditions, wraps undoable
+commands in an undo group and never lets an exception escape. A result is success (data, message, warnings) or an error
+code (`unknown-command`, `invalid-arguments`, `no-project`, `no-scene`, `not-found`, `already-exists`, `conflict`,
+`unsupported`, `failed`, `internal`) with a message that names the argument and what would work. `gambit <command|words>
+--option value` runs one command as one session on the project of `--project` or the current directory (its start scene
+is open; `--scene` picks another), saves the scenes and tables it changed when it succeeded (never under `--dry-run`),
+prints a summary or the result as JSON, and exits 0 (ok), 1 (the command failed) or 2 (usage: unknown command or option,
+arguments the schema rejects). `gambit batch` runs JSON lines in one session, stops at the first failure and then saves
+nothing unless `--keep-going`. Commands that write files at once carry `WritesFiles` and are refused in dry runs.
+
+**D-054 Undo (T06).** An `IUndoableOperation` performs its change on the first `Redo`, recording what `Undo` needs from
+the state it finds, and names its documents (scene or table paths) instead of pointing at them. The generic operations
+(component fields before/after, component presence, entity subtree snapshots with their UUIDs and sibling position,
+reparenting, table cells and rows) are built from reflection, so new components and commands need no undo code. Every
+undoable command is one step (an undo group, rolled back when the command fails); consecutive field edits with the same merge
+key and target merge (drags), never across undo, redo or a save. A document is dirty when the operations applied to it
+differ from the count at its last save; the history is bounded (1000 steps); a failing undo or redo clears it and keeps the
+documents dirty. Entities made by tools get random UUIDs and never draw from the world's generator.
+
+**D-055 Partial edits merge into structs (T06).** `component.set`, `bulk.set`, CSV import and, later, Lua table assignment
+start from the current value: a struct (also inside an array of structs, element i into element i) changes the members it
+names and keeps the others; vectors and other arrays are replaced whole; elements beyond the current array start from the
+struct's defaults. Loading files and prefabs still starts from defaults (`FieldValueMergeFromJson` vs. `FieldValueFromJson`).
+
+**D-056 Comments (T06).** A thread is `<Project>/Comments/<id>.json` (format version 1: `Id` `"0x"` + 16 hex digits,
+`Target`, `Author`, `Status` `Open`/`Resolved`, `Created`/`Updated` and message timestamps in UTC ISO-8601 from the wall
+clock, `Messages`), written whenever it changes. Authors are 1 to 128 and messages 1 to 16384 bytes of valid UTF-8; targets
+are validated per kind. Files that are not valid threads are reported and never rewritten. The folder is not scanned for
+assets and is never exported. `GAMBIT_AUTHOR` names the author on the command line; dry runs keep threads in memory.
+
+**D-057 Struct infos belong to the registry (T06).** `FieldAttributes::Struct` is a non-owning pointer to a `StructInfo`
+that the `TypeRegistry` owns and outlives, so a struct can hold a `std::vector` of itself (blend trees) without a reference
+cycle that would never be freed.

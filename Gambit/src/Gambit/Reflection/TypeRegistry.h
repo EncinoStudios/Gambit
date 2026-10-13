@@ -342,7 +342,7 @@ namespace Gambit
 			}
 			else if constexpr (IsStructType<Element>)
 			{
-				field.Attributes.Struct = registry.template FindStruct<Element>();
+				field.Attributes.Struct = registry.template FindStruct<Element>().get();
 				GB_CORE_VERIFY(
 					field.Attributes.Struct != nullptr, "field '{}.{}': register struct {} before the type using it",
 					ownerName, name, entt::type_name<Element>::value());

@@ -4,6 +4,8 @@
 
 #include "Gambit/Core/Version.h"
 
+#include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -231,4 +233,67 @@ TEST_CASE("CLI: the built-in version command prints the engine version")
 	CHECK(help.ExitCode == ExitSuccess);
 	CHECK(help.Out.starts_with("Usage: gambit <command> [options]\n"));
 	CHECK(help.Out.find("version") != std::string::npos);
+}
+
+namespace
+{
+	// A provider with one multi-word-style command, "ping".
+	class PingProvider final : public ICommandProvider
+	{
+	public:
+		std::optional<int> TryRun(std::span<const std::string> args, const CommandContext& context) override
+		{
+			if (args.front() != "ping")
+			{
+				return std::nullopt;
+			}
+			context.Out << "pong " << args.size() - 1 << '\n';
+			return 7;
+		}
+
+		bool TryPrintHelp(std::span<const std::string> words, const CommandContext& context) override
+		{
+			if (words.front() != "ping")
+			{
+				return false;
+			}
+			context.Out << "help of ping\n";
+			return true;
+		}
+
+		void PrintCommandList(std::ostream& out) const override { out << "\nProvided commands:\n  ping\n"; }
+	};
+}
+
+TEST_CASE("CLI: providers run the command lines that no registered command takes")
+{
+	CommandDispatcher dispatcher("tool");
+	REQUIRE(dispatcher.Register(MakeEcho()).HasValue());
+	dispatcher.AddProvider(Gambit::CreateRef<PingProvider>());
+
+	const Captured provided = Run(dispatcher, { "ping", "a", "b" });
+	CHECK(provided.ExitCode == 7);
+	CHECK(provided.Out == "pong 2\n");
+
+	// Registered commands come first, and what nobody takes is still a usage error.
+	CHECK(Run(dispatcher, { "echo", "x" }).Out == "x\n");
+	const Captured unknown = Run(dispatcher, { "pong" });
+	CHECK(unknown.ExitCode == ExitUsage);
+	CHECK(unknown.Err.starts_with("tool: unknown command 'pong'"));
+}
+
+TEST_CASE("CLI: help asks the providers and lists their commands")
+{
+	CommandDispatcher dispatcher("tool");
+	dispatcher.AddProvider(Gambit::CreateRef<PingProvider>());
+
+	const Captured help = Run(dispatcher, { "help", "ping" });
+	CHECK(help.ExitCode == ExitSuccess);
+	CHECK(help.Out == "help of ping\n");
+	CHECK(Run(dispatcher, { "help", "pong" }).ExitCode == ExitUsage);
+
+	const Captured list = Run(dispatcher, { "--help" });
+	CHECK(list.Out.find("Provided commands:\n  ping\n") != std::string::npos);
+	CHECK(list.Out.find("Run 'tool help <command>'") != std::string::npos); // the footer stays last
+	CHECK(list.Out.find("Provided commands:") < list.Out.find("Run 'tool help <command>'"));
 }

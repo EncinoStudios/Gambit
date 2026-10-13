@@ -39,6 +39,19 @@ namespace Gambit
 	[[nodiscard]] Result<FieldValue>
 	FieldValueFromJson(const FieldInfo& field, const Json& json, std::string_view path, LoadReport& report);
 
+	// Like FieldValueFromJson, but for editing: a struct given as an object (or elements of an array of structs given
+	// as objects) change only the members the object names, the others keep their values from `current`; nested structs
+	// merge the same way. Element i of an array of structs merges into element i of the current array, elements beyond
+	// it start from the struct's defaults, and the result has as many elements as `json`. Everything else (scalars,
+	// vectors, arrays of other types) is replaced as a whole, exactly as FieldValueFromJson reads it. Unknown members
+	// of struct objects are warnings in `report`. This is the rule of component.set, bulk.set and script table
+	// assignment.
+	[[nodiscard]] Result<FieldValue> FieldValueMergeFromJson(
+		const FieldInfo& field, const FieldValue& current, const Json& json, std::string_view path, LoadReport& report);
+	[[nodiscard]] Result<StructValue> StructValueMergeFromJson(
+		const StructInfo& info, const StructValue& current, const Json& json, std::string_view path,
+		LoadReport& report);
+
 	// A struct value as an object with a member for each serialized field, in field order.
 	[[nodiscard]] Result<Json>
 	StructValueToJson(const StructInfo& info, const StructValue& value, std::string_view path = {});

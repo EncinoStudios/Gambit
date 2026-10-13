@@ -858,7 +858,22 @@ namespace Gambit
 		return SetValue(rowId, column, *value);
 	}
 
+	std::optional<size_t> DataTable::FindRowIndex(std::string_view id) const
+	{
+		const auto found = m_RowIndex.find(std::string(id));
+		if (found == m_RowIndex.end())
+		{
+			return std::nullopt;
+		}
+		return found->second;
+	}
+
 	Result<void> DataTable::AddRow(std::string_view id, std::span<const FieldValue> values)
+	{
+		return InsertRow(m_Rows.size(), id, values);
+	}
+
+	Result<void> DataTable::InsertRow(size_t position, std::string_view id, std::span<const FieldValue> values)
 	{
 		if (id.empty() || !IsValidUtf8(id))
 		{
@@ -893,8 +908,14 @@ namespace Gambit
 			}
 			row.Values.push_back(value);
 		}
-		m_RowIndex.emplace(row.Id, m_Rows.size());
-		m_Rows.push_back(std::move(row));
+		if (position >= m_Rows.size())
+		{
+			m_RowIndex.emplace(row.Id, m_Rows.size());
+			m_Rows.push_back(std::move(row));
+			return {};
+		}
+		m_Rows.insert(m_Rows.begin() + static_cast<std::ptrdiff_t>(position), std::move(row));
+		RebuildIndex();
 		return {};
 	}
 

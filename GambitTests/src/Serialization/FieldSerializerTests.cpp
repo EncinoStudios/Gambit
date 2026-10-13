@@ -410,3 +410,145 @@ TEST_CASE("Serialization: struct objects convert to JSON and back")
 		StructFromJson(stats, Json::parse(R"({"Level": 5, "Speed": "fast"})"), &untouched, "", report).HasValue());
 	CHECK(untouched.Level == 1);
 }
+
+namespace
+{
+	std::string MergeError(const FieldInfo& field, const FieldValue& current, const Json& json)
+	{
+		LoadReport report;
+		const Result<FieldValue> merged = FieldValueMergeFromJson(field, current, json, "/Value", report);
+		REQUIRE_FALSE(merged.HasValue());
+		return merged.GetError().Message;
+	}
+
+	FieldValue Merge(const FieldInfo& field, const FieldValue& current, const Json& json, LoadReport* report = nullptr)
+	{
+		LoadReport local;
+		const Result<FieldValue> merged =
+			FieldValueMergeFromJson(field, current, json, "/Value", report != nullptr ? *report : local);
+		REQUIRE_MESSAGE(merged.HasValue(), (merged.HasValue() ? std::string() : merged.GetError().Message));
+		return *merged;
+	}
+}
+
+TEST_CASE("Serialization: merging a partial struct keeps the members it does not name")
+{
+	Fixture fixture;
+	const FieldInfo& main = *fixture.Structs->FindField("Main");
+	StructsComponent component;
+	component.Main.Clip = "walk";
+	component.Main.Weight = 0.75f;
+	component.Main.Stats = TestStats{ 9, 2.5f, "kept" };
+	component.Main.Curve = { 1.0f, 2.0f, 3.0f };
+	component.Main.History.push_back(TestStats{ 1, 1.0f, "old" });
+	const FieldValue current = main.GetValue(&component);
+
+	// {"Weight": 0.5} changes the weight and nothing else (decoding it against the defaults would reset the rest).
+	const FieldValue merged = Merge(main, current, Json::parse(R"({"Weight": 0.5})"));
+	TestLayer layer;
+	REQUIRE(main.Attributes.Struct->Write(&layer, std::get<StructValue>(merged)));
+	CHECK(layer.Weight == 0.5f);
+	CHECK(layer.Clip == "walk");
+	CHECK(layer.Stats.Label == "kept");
+	CHECK(layer.Curve == std::vector<float>{ 1.0f, 2.0f, 3.0f });
+	REQUIRE(layer.History.size() == 1);
+	CHECK(layer.History[0].Label == "old");
+
+	// The decoding that is not for editing resets them.
+	const FieldValue replaced = Decode(main, Json::parse(R"({"Weight": 0.5})"));
+	REQUIRE(main.Attributes.Struct->Write(&layer, std::get<StructValue>(replaced)));
+	CHECK(layer.Clip == "idle");
+
+	// Nested structs merge too.
+	const FieldValue nested = Merge(main, current, Json::parse(R"({"Stats": {"Level": 5}})"));
+	REQUIRE(main.Attributes.Struct->Write(&layer, std::get<StructValue>(nested)));
+	CHECK(layer.Stats.Level == 5);
+	CHECK(layer.Stats.Speed == 2.5f);
+	CHECK(layer.Stats.Label == "kept");
+	CHECK(layer.Clip == "walk");
+
+	// An empty object changes nothing.
+	CHECK(Merge(main, current, Json::object()) == current);
+
+	// Arrays that are not arrays of structs are replaced as a whole.
+	const FieldValue curve = Merge(main, current, Json::parse(R"({"Curve": [9.0]})"));
+	REQUIRE(main.Attributes.Struct->Write(&layer, std::get<StructValue>(curve)));
+	CHECK(layer.Curve == std::vector<float>{ 9.0f });
+}
+
+TEST_CASE("Serialization: merging arrays of structs merges element by element")
+{
+	Fixture fixture;
+	const FieldInfo& layers = *fixture.Structs->FindField("Layers");
+	StructsComponent component;
+	component.Layers.resize(2);
+	component.Layers[0].Clip = "first";
+	component.Layers[0].Weight = 0.25f;
+	component.Layers[1].Clip = "second";
+	component.Layers[1].Stats.Label = "second stats";
+	component.Layers[1].History.push_back(TestStats{ 7, 7.0f, "history" });
+	const FieldValue current = layers.GetValue(&component);
+
+	const auto write = [&](const FieldValue& value) {
+		StructsComponent target;
+		REQUIRE(layers.SetValue(&target, value));
+		return target;
+	};
+
+	// Element 0 merges; the array has as many elements as the JSON.
+	StructsComponent result = write(Merge(layers, current, Json::parse(R"([{"Weight": 0.5}])")));
+	REQUIRE(result.Layers.size() == 1);
+	CHECK(result.Layers[0].Weight == 0.5f);
+	CHECK(result.Layers[0].Clip == "first");
+
+	// Elements beyond the current ones start from the defaults; nested arrays of structs merge as well.
+	result = write(Merge(
+		layers, current,
+		Json::parse(R"([{}, {"Stats": {"Level": 1}, "History": [{"Label": "changed"}]}, {"Weight": 0.1}])")));
+	REQUIRE(result.Layers.size() == 3);
+	CHECK(result.Layers[0].Clip == "first");
+	CHECK(result.Layers[0].Weight == 0.25f);
+	CHECK(result.Layers[1].Clip == "second");
+	CHECK(result.Layers[1].Stats.Level == 1);
+	CHECK(result.Layers[1].Stats.Label == "second stats");
+	REQUIRE(result.Layers[1].History.size() == 1);
+	CHECK(result.Layers[1].History[0].Level == 7);
+	CHECK(result.Layers[1].History[0].Label == "changed");
+	CHECK(result.Layers[2].Clip == "idle");
+	CHECK(result.Layers[2].Weight == 0.1f);
+
+	CHECK(write(Merge(layers, current, Json::array())).Layers.empty());
+}
+
+TEST_CASE("Serialization: merging reports unknown members and mistakes with their path")
+{
+	Fixture fixture;
+	const FieldInfo& main = *fixture.Structs->FindField("Main");
+	const FieldInfo& layers = *fixture.Structs->FindField("Layers");
+	const FieldValue current = main.Default;
+
+	LoadReport report;
+	static_cast<void>(Merge(main, current, Json::parse(R"({"Bogus": 1, "Stats": {"Nope": 2}, "Cache": 3})"), &report));
+	REQUIRE(report.GetWarnings().size() == 3);
+	CHECK(report.GetWarnings()[0].Path == "/Value/Bogus");
+
+	CHECK(MergeError(main, current, Json::parse("[]")) == "/Value: expected an object, found an array");
+	CHECK(
+		MergeError(main, current, Json::parse(R"({"Stats": {"Level": "high"}})"))
+		== "/Value/Stats/Level: expected an integer, found a string");
+	CHECK(MergeError(layers, layers.Default, Json::parse("{}")) == "/Value: expected an array, found an object");
+	CHECK(
+		MergeError(layers, layers.Default, Json::parse(R"([{}, 5])"))
+		== "/Value/1: expected an object, found a number");
+	CHECK(MergeError(layers, layers.Default, Json::parse(R"([{"Mode": "Warp"}])"))
+	          .starts_with("/Value/0/Mode: 'Warp' is not a value of enum"));
+
+	// Everything that is not a struct reads exactly as FieldValueFromJson does.
+	const FieldInfo& level = *fixture.AllTypes->FindField("Int32");
+	CHECK(Merge(level, FieldValue(int32_t{ 3 }), Json(40)) == FieldValue(int32_t{ 40 }));
+	CHECK(MergeError(level, FieldValue(int32_t{ 3 }), Json("x")) == "/Value: expected an integer, found a string");
+
+	// A current value of the wrong shape (a stale value) is replaced by the defaults before merging.
+	const FieldValue merged = Merge(main, FieldValue(1.0f), Json::parse(R"({"Clip": "x"})"));
+	CHECK(std::get<StructValue>(merged).Values.size() == main.Attributes.Struct->GetFields().size());
+}

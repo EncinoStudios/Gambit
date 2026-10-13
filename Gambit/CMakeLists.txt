@@ -35,7 +35,8 @@ find_package(Threads REQUIRED)
 # nlohmann_json: the serialization and command APIs pass JSON documents (Serialization/Json.h). So is NVRHI: the
 # renderer and editor talk to the GPU through NVRHI handles (D-030); Vulkan itself stays private to RHI/Vulkan.
 target_link_libraries(Gambit PUBLIC Threads::Threads glm::glm EnTT::EnTT nlohmann_json::nlohmann_json nvrhi)
-target_link_libraries(Gambit PRIVATE xxhash::xxhash glfw::glfw stb::stb nvrhi_vk Vulkan::Headers)
+target_link_libraries(Gambit PRIVATE
+    xxhash::xxhash glfw::glfw stb::stb cgltf::cgltf mikktspace::mikktspace nvrhi_vk Vulkan::Headers)
 
 # Engine shaders (D-031): every <Name>.<stage>.glsl outside Shaders/Include is compiled and embedded.
 file(GLOB_RECURSE GB_ENGINE_SHADERS CONFIGURE_DEPENDS

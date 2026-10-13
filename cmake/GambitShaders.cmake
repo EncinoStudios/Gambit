@@ -8,6 +8,13 @@
 # #include "File.glsl" (the shader enables GL_GOOGLE_include_directive). Depfiles make header edits recompile the shaders
 # that include them, and a compile error fails the build with glslang's message.
 #
+# glslang runs in the target's binary directory and gets every path relative to it. Its depfile writer escapes ':' and
+# backslashes Makefile-style, which CMake's depfile reader (it rewrites the file for Ninja, policy CMP0116) does not
+# undo: an absolute Windows path such as C:\Gambit\Shaders\X.glsl would come back as a file that does not exist, and
+# Ninja would rebuild the shader every time. Relative paths with forward slashes contain neither character (glslang
+# writes included files with forward slashes too); only a source tree on another drive than the build tree falls back
+# to absolute paths.
+#
 # The target gets a generated <target>EmbeddedShaders.cpp defining Gambit::EmbeddedShaders::Get<target>Shaders(), and
 # the matching header <target>EmbeddedShaders.h on its include path. The engine (target Gambit) finds its own shaders
 # automatically; other targets hand theirs to ShaderLibrary::Register.
@@ -15,6 +22,16 @@
 set(GB_SHADER_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../Gambit/Shaders/Include")
 cmake_path(NORMAL_PATH GB_SHADER_INCLUDE_DIR)
 set(GB_EMBED_SHADERS_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/GambitEmbedShaders.cmake")
+
+# `path` relative to the current binary directory, the working directory of the shader commands; the absolute path when
+# there is no relative one (another drive).
+function(gb_shader_command_path path output)
+    cmake_path(RELATIVE_PATH path BASE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}" OUTPUT_VARIABLE relative)
+    if(relative STREQUAL "" OR IS_ABSOLUTE "${relative}")
+        set(relative "${path}")
+    endif()
+    set(${output} "${relative}" PARENT_SCOPE)
+endfunction()
 
 function(gb_add_shaders target)
     if(NOT TARGET ${target})
@@ -31,6 +48,7 @@ function(gb_add_shaders target)
     set(names "")
     set(binaries "")
     set(sources "")
+    gb_shader_command_path("${GB_SHADER_INCLUDE_DIR}" include_argument)
     foreach(source IN LISTS ARGN)
         cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" NORMALIZE OUTPUT_VARIABLE source)
         list(APPEND sources "${source}")
@@ -48,6 +66,8 @@ function(gb_add_shaders target)
 
         set(binary "${output_dir}/${name}.spv")
         set(depfile "${output_dir}/${name}.d")
+        gb_shader_command_path("${binary}" binary_argument)
+        gb_shader_command_path("${source}" source_argument)
         add_custom_command(
             OUTPUT "${binary}"
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
@@ -56,11 +76,12 @@ function(gb_add_shaders target)
                 --target-env vulkan1.2
                 -S ${stage}
                 "$<$<CONFIG:Debug>:-g>"
-                "-I${GB_SHADER_INCLUDE_DIR}"
+                "-I${include_argument}"
                 --depfile "${depfile}"
-                -o "${binary}"
-                "${source}"
+                -o "${binary_argument}"
+                "${source_argument}"
             MAIN_DEPENDENCY "${source}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
             # A file-level dependency, so a rebuilt compiler recompiles the shaders.
             DEPENDS glslang-standalone
             DEPFILE "${depfile}"

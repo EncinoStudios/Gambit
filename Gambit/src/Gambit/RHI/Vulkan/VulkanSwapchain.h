@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Gambit/Core/Base.h"
+#include "Gambit/Core/ErrorBurstLimiter.h"
 #include "Gambit/Core/Result.h"
 #include "Gambit/Math/Math.h"
 
@@ -102,7 +103,8 @@ namespace Gambit
 			uint64_t Frame = 0; // the frame count when it was retired
 		};
 
-		[[nodiscard]] Status Classify(vk::Result result, const char* operation) const;
+		// Failures that repeat every frame (a lost surface) are logged once per burst by `errors`.
+		[[nodiscard]] static Status Classify(vk::Result result, const char* operation, ErrorBurstLimiter& errors);
 
 		vk::Instance m_Instance;
 		const vk::detail::DispatchLoaderDynamic& m_Dispatch;
@@ -122,5 +124,7 @@ namespace Gambit
 		std::vector<vk::Semaphore> m_AcquireSemaphores;
 		std::vector<vk::Semaphore> m_PresentSemaphores;
 		std::vector<RetiredSemaphore> m_RetiredSemaphores;
+		ErrorBurstLimiter m_AcquireErrors{ "Acquiring a swap chain image" };
+		ErrorBurstLimiter m_PresentErrors{ "Presenting a swap chain image" };
 	};
 }

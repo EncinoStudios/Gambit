@@ -291,12 +291,14 @@ namespace Gambit
 		});
 	}
 
-	VulkanSwapchain::Status VulkanSwapchain::Classify(vk::Result result, const char* operation) const
+	VulkanSwapchain::Status
+	VulkanSwapchain::Classify(vk::Result result, const char* operation, ErrorBurstLimiter& errors)
 	{
 		switch (result)
 		{
 			case vk::Result::eSuccess:
 			case vk::Result::eSuboptimalKHR:
+				errors.ReportSuccess();
 				return Status::Success;
 			case vk::Result::eErrorOutOfDateKHR:
 				return Status::OutOfDate;
@@ -304,7 +306,8 @@ namespace Gambit
 				GB_CORE_ERROR("{}: the Vulkan device was lost", operation);
 				return Status::DeviceLost;
 			default:
-				GB_CORE_ERROR("{} failed: {}", operation, vk::to_string(result));
+				// A lost surface fails every frame until the window system gives it back.
+				errors.ReportFailure(vk::to_string(result));
 				return Status::Failed;
 		}
 	}
@@ -316,7 +319,7 @@ namespace Gambit
 			m_Swapchain, std::numeric_limits<uint64_t>::max(), m_AcquireSemaphores.at(frameSlot), nullptr, &imageIndex,
 			m_Dispatch);
 		suboptimal = result == vk::Result::eSuboptimalKHR;
-		return Classify(result, "Acquiring a swap chain image");
+		return Classify(result, "Acquiring a swap chain image", m_AcquireErrors);
 	}
 
 	VulkanSwapchain::Status VulkanSwapchain::Present(vk::Queue queue, uint32_t imageIndex, bool& suboptimal)
@@ -331,6 +334,6 @@ namespace Gambit
 												   .setPImageIndices(&imageIndex);
 		const vk::Result result = queue.presentKHR(&presentInfo, m_Dispatch);
 		suboptimal = result == vk::Result::eSuboptimalKHR;
-		return Classify(result, "Presenting a swap chain image");
+		return Classify(result, "Presenting a swap chain image", m_PresentErrors);
 	}
 }

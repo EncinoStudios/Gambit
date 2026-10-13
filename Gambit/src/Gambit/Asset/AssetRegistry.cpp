@@ -3,6 +3,7 @@
 #include "Gambit/Asset/AssetRegistry.h"
 
 #include <set>
+#include <tuple>
 
 namespace Gambit
 {
@@ -75,8 +76,17 @@ namespace Gambit
 			std::ranges::count_if(Issues, [kind](const ScanIssue& issue) { return issue.Kind == kind; }));
 	}
 
+	bool AssetRegistry::IsHandleTaken(AssetHandle handle) const
+	{
+		return m_PathOfHandle.contains(handle) || m_SubAssets.contains(handle);
+	}
+
 	Result<void> AssetRegistry::Add(AssetRecord record)
 	{
+		if (record.IsSubAsset())
+		{
+			return AddSubAsset(std::move(record));
+		}
 		if (!record.Handle.IsValid())
 		{
 			return Error("an asset needs a handle");
@@ -89,27 +99,73 @@ namespace Gambit
 		{
 			return valid;
 		}
-		if (m_PathOfHandle.contains(record.Handle))
+		if (const AssetRecord* owner = Find(record.Handle); owner != nullptr)
 		{
-			return Error::Format(
-				"handle {} is already used by '{}'", record.Handle.ToString(), m_PathOfHandle.at(record.Handle));
+			return Error::Format("handle {} is already used by '{}'", record.Handle.ToString(), owner->Path);
 		}
 		if (m_ByPath.contains(record.Path))
 		{
 			return Error::Format("'{}' is already registered", record.Path);
 		}
+		record.SubAssetKey.clear();
 		m_PathOfHandle.emplace(record.Handle, record.Path);
 		m_ByPath.emplace(record.Path, std::move(record));
 		return {};
 	}
 
+	Result<void> AssetRegistry::AddSubAsset(AssetRecord record)
+	{
+		if (!record.Handle.IsValid())
+		{
+			return Error("an asset needs a handle");
+		}
+		const AssetRecord* parent = Find(record.Parent);
+		if (parent == nullptr || parent->IsSubAsset())
+		{
+			return Error::Format(
+				"the sub-asset '{}' needs a registered file as its parent, not {}", record.SubAssetKey,
+				record.Parent.ToString());
+		}
+		if (record.Type == AssetType::None || record.SubAssetKey.empty())
+		{
+			return Error::Format("a sub-asset of '{}' needs a type and a key", parent->Path);
+		}
+		if (const AssetRecord* owner = Find(record.Handle); owner != nullptr)
+		{
+			return Error::Format("handle {} is already used by '{}'", record.Handle.ToString(), owner->Path);
+		}
+		if (FindSubAsset(record.Parent, record.SubAssetKey) != nullptr)
+		{
+			return Error::Format("'{}' already has a sub-asset '{}'", parent->Path, record.SubAssetKey);
+		}
+		record.Path = parent->Path;
+		const AssetHandle handle = record.Handle;
+		m_SubAssetsByKey.emplace(std::make_pair(record.Parent, record.SubAssetKey), handle);
+		m_SubAssets.emplace(handle, std::move(record));
+		return {};
+	}
+
 	bool AssetRegistry::Remove(AssetHandle handle)
 	{
+		if (const auto subAsset = m_SubAssets.find(handle); subAsset != m_SubAssets.end())
+		{
+			m_SubAssetsByKey.erase(std::make_pair(subAsset->second.Parent, subAsset->second.SubAssetKey));
+			m_SubAssets.erase(subAsset);
+			return true;
+		}
 		const auto found = m_PathOfHandle.find(handle);
 		if (found == m_PathOfHandle.end())
 		{
 			return false;
 		}
+		const auto first = m_SubAssetsByKey.lower_bound(std::make_pair(handle, std::string()));
+		auto last = first;
+		while (last != m_SubAssetsByKey.end() && last->first.first == handle)
+		{
+			m_SubAssets.erase(last->second);
+			++last;
+		}
+		m_SubAssetsByKey.erase(first, last);
 		m_ByPath.erase(found->second);
 		m_PathOfHandle.erase(found);
 		return true;
@@ -119,12 +175,18 @@ namespace Gambit
 	{
 		m_ByPath.clear();
 		m_PathOfHandle.clear();
+		m_SubAssets.clear();
+		m_SubAssetsByKey.clear();
 	}
 
 	const AssetRecord* AssetRegistry::Find(AssetHandle handle) const
 	{
-		const auto found = m_PathOfHandle.find(handle);
-		return found == m_PathOfHandle.end() ? nullptr : &m_ByPath.find(found->second)->second;
+		if (const auto found = m_PathOfHandle.find(handle); found != m_PathOfHandle.end())
+		{
+			return &m_ByPath.find(found->second)->second;
+		}
+		const auto subAsset = m_SubAssets.find(handle);
+		return subAsset == m_SubAssets.end() ? nullptr : &subAsset->second;
 	}
 
 	const AssetRecord* AssetRegistry::FindByPath(std::string_view path) const
@@ -133,15 +195,45 @@ namespace Gambit
 		return found == m_ByPath.end() ? nullptr : &found->second;
 	}
 
+	const AssetRecord* AssetRegistry::FindSubAsset(AssetHandle parent, std::string_view key) const
+	{
+		const auto found = m_SubAssetsByKey.find(std::make_pair(parent, std::string(key)));
+		return found == m_SubAssetsByKey.end() ? nullptr : &m_SubAssets.at(found->second);
+	}
+
 	std::vector<AssetRecord> AssetRegistry::List(AssetType type) const
 	{
 		std::vector<AssetRecord> records;
+		const auto matches = [type](const AssetRecord& record) {
+			return type == AssetType::None || record.Type == type;
+		};
 		for (const auto& [path, record] : m_ByPath)
 		{
-			if (type == AssetType::None || record.Type == type)
+			if (matches(record))
 			{
 				records.push_back(record);
 			}
+		}
+		for (const auto& [key, handle] : m_SubAssetsByKey)
+		{
+			if (const AssetRecord& record = m_SubAssets.at(handle); matches(record))
+			{
+				records.push_back(record);
+			}
+		}
+		std::ranges::stable_sort(records, [](const AssetRecord& a, const AssetRecord& b) {
+			return std::tie(a.Path, a.SubAssetKey) < std::tie(b.Path, b.SubAssetKey);
+		});
+		return records;
+	}
+
+	std::vector<AssetRecord> AssetRegistry::ListSubAssets(AssetHandle parent) const
+	{
+		std::vector<AssetRecord> records;
+		for (auto entry = m_SubAssetsByKey.lower_bound(std::make_pair(parent, std::string()));
+		     entry != m_SubAssetsByKey.end() && entry->first.first == parent; ++entry)
+		{
+			records.push_back(m_SubAssets.at(entry->second));
 		}
 		return records;
 	}
@@ -291,7 +383,7 @@ namespace Gambit
 			registerAsset(handle, candidate);
 		}
 
-		// The others get a handle and a .meta file, if the content may be written.
+		// The others get a handle and a .meta file, if the content may be written (they have no sub-assets yet).
 		for (Candidate* candidate : unnamed)
 		{
 			const bool hadMetaFile = candidate->MetaFileExists;
@@ -323,6 +415,32 @@ namespace Gambit
 			else
 			{
 				++report.CreatedMetas;
+			}
+		}
+
+		// The sub-assets the .meta files of the registered files list (D-038), in path and list order.
+		for (const Candidate& candidate : candidates)
+		{
+			const AssetRecord* file = FindByPath(candidate.Path);
+			if (file == nullptr || file->Handle != candidate.Metadata.Handle)
+			{
+				continue; // not registered (a duplicate): its sub-assets are not either
+			}
+			for (const SubAssetEntry& entry : candidate.Metadata.SubAssets)
+			{
+				if (const AssetRecord* owner = Find(entry.Handle); owner != nullptr)
+				{
+					Report(
+						report, ScanIssueKind::DuplicateHandle, candidate.Path,
+						std::format(
+							"the sub-asset '{}' has the handle {} of '{}'{}; it is not registered", entry.Key,
+							entry.Handle.ToString(), owner->Path,
+							owner->IsSubAsset() ? std::format(" ('{}')", owner->SubAssetKey) : std::string()));
+					continue;
+				}
+				[[maybe_unused]] const Result<void> added =
+					AddSubAsset({ entry.Handle, candidate.Path, entry.Type, file->Handle, entry.Key });
+				GB_CORE_ASSERT(added.HasValue(), "Asset scan: a checked sub-asset was refused");
 			}
 		}
 

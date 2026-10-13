@@ -4,6 +4,7 @@
 #include "Gambit/ECS/Components/CoreComponents.h"
 #include "Gambit/Project/ProjectSettings.h"
 #include "Gambit/Reflection/TypeRegistry.h"
+#include "Gambit/Renderer/RendererTypes.h"
 
 namespace Gambit
 {
@@ -14,5 +15,6 @@ namespace Gambit
 		RegisterCoreComponents(registry);
 		RegisterAssetComponents(registry);
 		RegisterProjectTypes(registry);
+		RegisterRendererTypes(registry);
 	}
 }

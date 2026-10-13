@@ -17,8 +17,10 @@ Shaders are GLSL 460 compiled to SPIR-V at build time and embedded in the binary
   (`LinearToSrgb`, `SrgbToLinear`, matching the CPU functions in `RHI/Image.h`).
 - Bindings: `layout(set = S, binding = B)` with `B` unique within the set across all resource types (NVRHI binding
   offsets are zero). Push constants: `layout(push_constant) uniform ...` (≤ 128 bytes to be portable).
-- Conventions: clip space +Y up, depth 0..1, UV (0, 0) top-left, clockwise front faces. Post passes reuse
-  `FullscreenTriangle.vert` and read `layout(location = 0) in vec2 inUV`.
+- Conventions: clip space +Y up, depth 0..1, UV (0, 0) top-left, clockwise front faces (NVRHI default; scene meshes
+  are counter-clockwise and use reversed depth, D-044). Post passes reuse `FullscreenTriangle.vert` and read
+  `layout(location = 0) in vec2 inUV`. Scene shaders include `SceneData.glsl` (frame constants, lights, draw push
+  constants, mirrored by `Renderer/GpuTypes.h`) and `PBR.glsl` (BRDF).
 - New files are picked up at the next configure (`build.py` re-globs automatically). A compile error fails the build
   with glslang's `ERROR: <file>:<line>: ...` message; the build log has the full command.
 

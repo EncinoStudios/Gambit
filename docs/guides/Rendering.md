@@ -20,7 +20,8 @@ Gambit renders through **NVRHI on Vulkan** (D-030). Engine code talks to the GPU
   and errors are counted (`GetValidationErrorCount()`, must stay 0 in tests).
 - Conventions: NVRHI flips the Vulkan viewport, so clip space is **+Y up** with depth 0..1 (GLM's zero-to-one
   matrices work unchanged), the framebuffer origin and UV (0, 0) are top-left, and front faces are **clockwise** on
-  screen (NVRHI default). Textures read back with `ReadbackTexture` / `ReadbackBuffer` need `keepInitialState`.
+  screen (NVRHI default); scene meshes are counter-clockwise (glTF, D-044), so their pipelines set
+  `frontCounterClockwise`. Textures read back with `ReadbackTexture` / `ReadbackBuffer` need `keepInitialState`.
 - Back buffers: windowed 8-bit sRGB (or UNORM) BGRA/RGBA; headless exactly `spec.BackBufferFormat`
   (default `SRGBA8_UNORM`). Write linear values to sRGB targets; encode with `ColorSpace.glsl` for UNORM ones.
 
@@ -50,3 +51,79 @@ Gambit renders through **NVRHI on Vulkan** (D-030). Engine code talks to the GPU
   review the PNG, rerun without it, and say so in the commit message.
 - Render goldens into a texture you create (fixed size, `keepInitialState`), not the shared back buffer; keep them small
   (≤ 256 px) and lavapipe-friendly. Numeric checks (readback + `CHECK`) beat goldens where values are known.
+
+## Scene rendering (T08)
+
+Data flows one way (D-032, D-044): components → `RenderExtractionSystem` (PreRender phase, also in edit ticks) →
+`RenderScene` → `SceneRenderer::Render(scene, view, alpha, target)`. The renderer never reads the World.
+
+- **Components** (`Renderer/Components/RenderComponents.h`, reflected): `MeshRenderer` (a Mesh or a whole Model,
+  `SubmeshIndex` -1 = all, `MaterialOverrides` per slot, `CastShadows`, `ReceiveShadows`, `Visible`), `Camera`
+  (perspective/orthographic, `VerticalFOV` degrees, `Near`, `Far`, `OrthoSize` = view height, `Primary`, `ClearColor`),
+  `DirectionalLight` (`Illuminance` lux), `PointLight` and `SpotLight` (`Intensity` lumens, `Range` 0 = unlimited, cone
+  angles in degrees). Cameras look and lights shine along the entity's **-Z**; +Y is up.
+- **Extraction** copies active entities with a `WorldTransform` (add the `TransformSystem`) into lists sorted by UUID,
+  each with its previous- and current-tick world matrix (`RenderTransform::Interpolate(alpha)`: lerp, shortest-arc
+  slerp). Its `DebugDrawList` (`GetDebugDraw()`) collects debug lines with durations in seconds of ticks; it is
+  presentation state, never simulation state. `SetEnvironment` sets the uniform ambient light (until T09's IBL).
+- **A view** (`RenderView`): view and projection matrices (`MakeProjection`: reversed depth), clear color,
+  `ExposureEV100`, debug options (`DrawDebugLines`, `Shapes`: bounds, lights, cameras). `RenderView::FromCamera(camera,
+  alpha, aspect)` builds one from a scene camera; the editor builds its own.
+
+```cpp
+SceneRenderer renderer(device, assets);                               // once; owns RenderResources and the passes
+const RenderScene& scene = extraction.GetRenderScene();
+if (const RenderCamera* camera = scene.FindPrimaryCamera(); camera != nullptr && device.BeginFrame())
+{
+    const glm::uvec2 size = device.GetBackBufferSize();
+    RenderView view = RenderView::FromCamera(*camera, alpha, float(size.x) / float(size.y));
+    Result<SceneRenderStats> stats = renderer.Render(scene, view, alpha, device.GetCurrentFramebuffer());
+    device.Present();
+}
+```
+
+**Passes** (each records into the renderer's command list with explicit inputs and outputs, `Renderer/Passes/`):
+`DepthPrepass` (opaque and masked draws → D32 depth, cleared to 0) → `ForwardPass` (opaque/masked against the prepass's
+depth with `GreaterOrEqual`, then blended draws back to front → `RGBA16F` scene color, pre-exposed) → `TonemapPass`
+(temporary fitted ACES, sRGB-encoded for UNORM targets; T09 replaces it) → `DebugLinePass` (depth-tested lines, then
+overlay lines, into the target with the view's depth). View targets are sized per target and shared by views of the same
+size; sizes unused for `TargetIdleRenders` renders are released, so an editor viewport and a game view can render in one
+frame. Targets are any single-sampled framebuffer with one color attachment (back buffers included; nothing is kept
+across calls).
+
+**Draw lists**: models draw every node's mesh at `world * node.ModelTransform`; submeshes are culled against the view
+frustum (`Frustum`, `AABB::Transformed`), materials resolved (override, mesh slot, default material), opaque/masked
+draws sorted by pipeline, material and mesh handle, blended ones by view depth. Lights: directional first, then spot and
+point lights whose range sphere touches the frustum, at most `MaxLights` (256), in a structured buffer.
+
+**GPU data** (`Renderer/GpuTypes.h` mirrors `Shaders/Include/SceneData.glsl`): set 0 = frame constants (binding 0),
+lights (1), draw push constants (2: model matrix, normal matrix columns with the determinant's sign in `[0].w`); set 1 =
+material constants (0) and five texture/sampler pairs (1..10: base color, metallic-roughness, normal, occlusion,
+emissive). Vertex streams: positions alone (stream 0), then normal, tangent, UV0, UV1, color interleaved (stream 1).
+
+**Shading** (`PBR.frag`, `Include/PBR.glsl`): glTF metallic-roughness, GGX + height-correlated Smith + Schlick +
+Lambert (Filament's formulation, roughness clamped to 0.045); normal maps in MikkTSpace (D-037) with `NormalScale`;
+occlusion scales the ambient light only; emissive color × strength is a luminance (cd/m², pre-exposed like everything
+else). Alpha: `Opaque` ignores alpha, `Mask` discards below `AlphaCutoff` in both passes, `Blend` blends over
+what is behind (`SrcAlpha`, `1 - SrcAlpha`) without depth writes. Double-sided materials
+draw back faces with the whole tangent frame flipped. Point and spot lights fall off with the inverse square, windowed to
+zero at `Range`; spot cones fade between the inner and outer angle.
+
+### Assets the renderer draws
+
+| Asset | Source | Notes |
+|---|---|---|
+| `Texture2D` | `.png` `.jpg` `.tga` `.bmp` (stb_image, through the VFS), glTF images | RGBA8 (sRGB or linear per `TextureImportSettings`), mips generated on the GPU (`GenerateMips.frag`, box filter in linear space, odd sizes weighted); HDR data decodes to RGBA32F (`.hdr` files are `Environment` assets, T09) |
+| `MeshSource` | glTF meshes, `MeshFactory` | CPU `MeshData` (streams, 32-bit indices, submeshes with material slots, bounds); uploaded as `GpuMesh` |
+| `Material` | `.gmat`, glTF materials | reflected struct `Material` (see FileFormats.md); `SetData` bumps the version and the GPU copy follows |
+| `Model` | `.gltf` / `.glb` (cgltf) | node hierarchy + sub-assets (D-038); `ModelUtils::Instantiate` creates entities |
+
+`RenderResources` creates GPU copies on first use and checks them once per frame: a reloaded asset or a new material
+version is re-uploaded; assets that fail are reported once and replaced (default textures, the default material, no
+mesh). Built-in assets have fixed handles (D-039): `MeshFactory::GetHandle(PrimitiveMesh::Cube)`,
+`GetDefaultTextureHandle(DefaultTexture::Checker)`, `Material::DefaultHandle`.
+
+Golden tests of the renderer (`GambitTests/src/Renderer/SceneRendererTests.cpp`): a metallic × roughness sphere grid,
+a textured glTF model rendered through a World, alpha mask/blend ordering, debug lines; numeric tests check the BRDF
+luminance of a lit plane, emissive output, mip filtering and mirrored winding. Test models come from
+`tools/gen_test_gltf.py` (output committed under `GambitTests/Assets/Models/`).

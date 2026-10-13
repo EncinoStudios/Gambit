@@ -4,6 +4,7 @@
 
 #include "Gambit/Core/Version.h"
 #include "Gambit/Platform/Window.h"
+#include "Gambit/RHI/Vulkan/VulkanLoader.h"
 
 #include <nvrhi/utils.h>
 #include <nvrhi/validation.h>
@@ -347,24 +348,14 @@ namespace Gambit
 
 	Result<void> VulkanGraphicsDevice::LoadVulkan()
 	{
-		try
-		{
-			m_Loader = CreateScope<vk::detail::DynamicLoader>();
-		}
-		catch (const std::exception& error)
+		const Result<PFN_vkGetInstanceProcAddr> getInstanceProcAddr = VulkanLoader::GetInstanceProcAddr();
+		if (!getInstanceProcAddr)
 		{
 			return DeviceError(
 				GraphicsDeviceError::VulkanUnavailable,
-				std::format("Vulkan is not available: cannot load the Vulkan loader library ({})", error.what()));
+				std::format("Vulkan is not available: {}", getInstanceProcAddr.GetError().Message));
 		}
-		const auto getInstanceProcAddr = m_Loader->getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-		if (getInstanceProcAddr == nullptr)
-		{
-			return DeviceError(
-				GraphicsDeviceError::VulkanUnavailable,
-				"Vulkan is not available: the Vulkan loader library has no vkGetInstanceProcAddr");
-		}
-		m_Dispatch.init(getInstanceProcAddr);
+		m_Dispatch.init(*getInstanceProcAddr);
 
 		const uint32_t loaderVersion = m_Dispatch.vkEnumerateInstanceVersion != nullptr
 			? vk::enumerateInstanceVersion(m_Dispatch)
@@ -1011,9 +1002,10 @@ namespace Gambit
 				const Result<bool> built = BuildSwapchain();
 				if (!built)
 				{
-					GB_CORE_ERROR("Cannot recreate the swap chain: {}", built.GetError().Message);
+					m_SwapchainBuildErrors.ReportFailure(built.GetError().Message);
 					return false;
 				}
+				m_SwapchainBuildErrors.ReportSuccess();
 				if (!*built)
 				{
 					return false;

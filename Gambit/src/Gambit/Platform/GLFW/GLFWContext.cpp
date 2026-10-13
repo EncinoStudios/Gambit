@@ -2,6 +2,11 @@
 
 #include "Gambit/Platform/GLFW/GLFWContext.h"
 
+#include "Gambit/RHI/Vulkan/VulkanLoader.h"
+
+// vulkan_core.h first: GLFW declares its Vulkan functions (glfwInitVulkanLoader) only when it sees the Vulkan types.
+#include <vulkan/vulkan_core.h>
+
 #include <GLFW/glfw3.h>
 
 namespace Gambit
@@ -23,6 +28,13 @@ namespace Gambit
 		if (s_ReferenceCount == 0)
 		{
 			glfwSetErrorCallback(OnError);
+			// GLFW creates the window surfaces of the graphics device, so both must use the same Vulkan loader (on
+			// macOS GLFW would search for one of its own). Without a loader GLFW keeps its own search, which fails the
+			// same way, and windows without Vulkan still work.
+			if (const Result<PFN_vkGetInstanceProcAddr> loader = VulkanLoader::GetInstanceProcAddr(); loader)
+			{
+				glfwInitVulkanLoader(*loader);
+			}
 			if (glfwInit() != GLFW_TRUE)
 			{
 				const char* description = nullptr;

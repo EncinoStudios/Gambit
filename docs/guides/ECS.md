@@ -70,7 +70,9 @@ world.GetScheduler().AddSystem(CreateScope<RegenerationSystem>());
 ```
 
 Phases run in the order of D-024 (`Input` ... `Transform`, `PreRender`). `RunsInEditMode()` opts a system into
-`SimulationMode::Edit` ticks. Add `TransformSystem` to every world that needs `WorldTransformComponent`.
+`SimulationMode::Edit` ticks. Add `TransformSystem` to every world that needs `WorldTransformComponent`, and
+`RenderExtractionSystem` (PreRender, edit mode too) to every world that is rendered: it copies cameras, lights and mesh
+renderers into a `RenderScene` and holds the world's debug draw list (`docs/guides/Rendering.md`).
 
 ## Rules that keep simulations deterministic (D-011)
 

@@ -4,9 +4,12 @@
 *.png binary
 *.jpg binary
 *.jpeg binary
+*.tga binary
+*.bmp binary
 *.hdr binary
 *.exr binary
 *.glb binary
+*.bin binary
 *.wav binary
 *.ogg binary
 *.mp3 binary

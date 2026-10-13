@@ -178,13 +178,15 @@ TEST_CASE("Asset: importers are registered per type, and types without one canno
 {
 	ProjectFixture project;
 	project.Directory.WriteFile("Assets/Crate.png", "pixels");
+	project.Directory.WriteFile("Assets/Beep.wav", "samples"); // no module imports audio yet
 	project.Assets.Scan();
 	const AssetHandle handle = project.Assets.GetHandle("Assets/Crate.png");
 
-	const Result<Ref<Asset>> without = project.Assets.LoadAsset(handle);
+	const Result<Ref<Asset>> without = project.Assets.LoadAsset(project.Assets.GetHandle("Assets/Beep.wav"));
 	REQUIRE_FALSE(without.HasValue());
-	CHECK(without.GetError().Message.find("no importer for Texture assets") != std::string::npos);
+	CHECK(without.GetError().Message.find("no importer for Audio assets") != std::string::npos);
 
+	// A registered importer replaces the engine's importer of its type.
 	int loads = 0;
 	project.Assets.RegisterImporter(CreateScope<CountingTextureImporter>(loads));
 	const Ref<CountingTexture> texture = project.Assets.GetAsset<CountingTexture>(handle);

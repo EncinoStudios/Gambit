@@ -124,7 +124,6 @@ namespace Gambit
 		std::atomic<uint64_t> m_ValidationErrorCount{ 0 };
 		NvrhiMessageCallback m_MessageCallback{ m_ValidationErrorCount };
 
-		Scope<vk::detail::DynamicLoader> m_Loader;
 		vk::detail::DispatchLoaderDynamic m_Dispatch;
 		vk::Instance m_Instance;
 		vk::DebugUtilsMessengerEXT m_Messenger;
@@ -154,6 +153,7 @@ namespace Gambit
 		uint32_t m_FrameSlot = 0;
 		bool m_InFrame = false;
 		bool m_SwapchainDirty = false; // rebuild before the next acquisition (suboptimal or out of date)
+		ErrorBurstLimiter m_SwapchainBuildErrors{ "Recreating the swap chain" };
 		bool m_DeviceLost = false;
 	};
 }

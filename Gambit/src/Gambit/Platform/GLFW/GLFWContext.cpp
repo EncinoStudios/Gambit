@@ -2,7 +2,7 @@
 
 #include "Gambit/Platform/GLFW/GLFWContext.h"
 
-#include "Gambit/RHI/Vulkan/VulkanLoader.h"
+#include "Gambit/Platform/Vulkan/VulkanLoader.h"
 
 // vulkan_core.h first: GLFW declares its Vulkan functions (glfwInitVulkanLoader) only when it sees the Vulkan types.
 #include <vulkan/vulkan_core.h>

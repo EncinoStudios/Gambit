@@ -82,10 +82,15 @@ namespace Gambit
 		std::vector<RenderSpotLight> SpotLights;
 		RenderEnvironment Environment;
 		std::vector<DebugLine> DebugLines;
-		uint64_t Tick = 0; // the world's tick when it was extracted
+		uint64_t Tick = 0;         // the world's tick when it was extracted
+		double Time = 0.0;         // the world's simulated seconds when it was extracted
+		double PreviousTime = 0.0; // and at the extraction before (Time again for the first one)
 
 		// The primary camera with the smallest UUID; null when there is none.
 		[[nodiscard]] const RenderCamera* FindPrimaryCamera() const;
+		// The simulated seconds at the interpolation factor `alpha` (0 = the previous tick, 1 = the current one), what
+		// shaders animate with (FrameConstants::Time).
+		[[nodiscard]] double GetTime(float alpha) const;
 		void Clear();
 	};
 }

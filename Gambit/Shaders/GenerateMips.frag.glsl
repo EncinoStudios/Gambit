@@ -7,7 +7,7 @@
 
 layout(set = 0, binding = 0) uniform texture2D u_Source; // a view of the level above only
 
-layout(location = 0) in vec2 inUV;
+layout(location = 0) in vec2 v_UV;
 
 layout(location = 0) out vec4 o_Color;
 

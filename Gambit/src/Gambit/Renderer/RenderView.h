@@ -43,17 +43,19 @@ namespace Gambit
 	// editor builds views from its own camera; the game's come from scene cameras (FromCamera).
 	struct RenderView
 	{
+		// Which view this is across frames: the SceneRenderer keeps render targets (and, later, temporal state such as
+		// auto-exposure) per id, so each view that renders every frame (an editor viewport, the game camera, a
+		// preview) needs an id of its own.
+		uint64_t ViewId = 0;
 		glm::mat4 View{ 1.0f };                         // world to view space (looking along -Z)
 		glm::mat4 Projection{ 1.0f };                   // view to clip space, reversed depth (MakeProjection)
 		glm::vec4 ClearColor{ 0.0f, 0.0f, 0.0f, 1.0f }; // linear RGBA behind everything
 		float ExposureEV100 = 15.0f;
 		bool DrawDebugLines = true; // the scene's debug lines
 		DebugShapes Shapes = DebugShapes::None;
-		// Seconds since the start of the simulation (shaders animate with it).
-		float Time = 0.0f;
 
 		// The view of a scene camera at the interpolation factor `alpha` (between the previous and the current
-		// tick), for a target with this aspect ratio.
+		// tick), for a target with this aspect ratio; its id is the camera entity's UUID.
 		[[nodiscard]] static RenderView FromCamera(const RenderCamera& camera, float alpha, float aspectRatio);
 
 		[[nodiscard]] glm::vec3 GetPosition() const;

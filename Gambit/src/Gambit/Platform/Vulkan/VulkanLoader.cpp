@@ -1,6 +1,6 @@
 #include "gbpch.h"
 
-#include "Gambit/RHI/Vulkan/VulkanLoader.h"
+#include "Gambit/Platform/Vulkan/VulkanLoader.h"
 
 #include <vulkan/vulkan.hpp>
 
@@ -40,13 +40,14 @@ namespace Gambit
 
 	Result<PFN_vkGetInstanceProcAddr> VulkanLoader::GetInstanceProcAddr()
 	{
-		// Function-local statics are initialized once, thread safely; the library stays loaded until exit, after every
-		// device and GLFW are gone.
-		static const LoadedLibrary s_Loaded = Load();
-		if (s_Loaded.GetInstanceProcAddr == nullptr)
+		// Function-local statics are initialized once, thread safely. The library is released on purpose: a static
+		// object would unload it during static destruction, possibly before a device or a GLFW window that another
+		// static owns calls vkDestroy* through it. The process's exit frees it.
+		static const LoadedLibrary* const s_Loaded = CreateScope<LoadedLibrary>(Load()).release();
+		if (s_Loaded->GetInstanceProcAddr == nullptr)
 		{
-			return Error(s_Loaded.Failure);
+			return Error(s_Loaded->Failure);
 		}
-		return s_Loaded.GetInstanceProcAddr;
+		return s_Loaded->GetInstanceProcAddr;
 	}
 }

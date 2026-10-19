@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "ECS/TestWorld.h"
+#include "TestSupport.h"
 #include "TestUtils/TempDirectory.h"
 
 #include "Gambit/Asset/AssetManager.h"
@@ -8,6 +9,7 @@
 #include "Gambit/Asset/Prefab.h"
 #include "Gambit/Asset/SceneAsset.h"
 
+#include <format>
 #include <string>
 #include <vector>
 
@@ -348,4 +350,43 @@ TEST_CASE("Asset: dependencies of data tables come from their asset columns")
 	REQUIRE(dependencies.HasValue());
 	CHECK(*dependencies == std::vector<AssetHandle>{ UUID(3), UUID(0x11) });
 	CHECK_FALSE(project.Assets.GetDependencies(UUID(5)).HasValue());
+}
+
+TEST_CASE("Asset: built-in handles take precedence over project assets that claim them (D-039)")
+{
+	ProjectFixture project;
+	const std::vector<AssetHandle> builtins = project.Assets.ListBuiltinAssets();
+	REQUIRE_FALSE(builtins.empty());
+	const AssetHandle builtin = builtins.front();
+	const std::string builtinPath = project.Assets.GetPath(builtin);
+	const AssetType builtinType = project.Assets.GetType(builtin);
+	REQUIRE(builtinPath.starts_with("builtin:"));
+
+	project.Directory.WriteFile("Assets/Fake.png", "png");
+	project.Directory.WriteFile(
+		"Assets/Fake.png.meta",
+		std::format(R"({{ "Version": 1, "Handle": "{}", "Type": "Texture" }})", builtin.ToString()));
+	ScanReport report;
+	{
+		const ScopedLogCapture log;
+		report = project.Assets.Scan();
+		CHECK(log.Contains(LogLevel::Warn, "built-in"));
+	}
+	// The scan reports the claim and leaves the file out until it gets a handle of its own.
+	CHECK(report.Count(ScanIssueKind::DuplicateHandle) == 1);
+	CHECK(report.AssetCount == 0);
+	CHECK(project.Assets.FindByPath("Assets/Fake.png") == nullptr);
+	CHECK(project.Assets.GetPath(builtin) == builtinPath);
+	CHECK(project.Assets.GetType(builtin) == builtinType);
+	const Result<Ref<Asset>> loaded = project.Assets.LoadAsset(builtin);
+	REQUIRE(loaded.HasValue());
+	CHECK((*loaded)->GetPath() == builtinPath);
+
+	// Registering the file directly is refused the same way; a new handle makes it an asset.
+	CHECK_FALSE(project.Assets.RegisterFile("Assets/Fake.png").HasValue());
+	const Result<AssetHandle> renewed = project.Assets.AssignNewHandle("Assets/Fake.png");
+	REQUIRE(renewed.HasValue());
+	CHECK(*renewed != builtin);
+	CHECK(project.Assets.GetHandle("Assets/Fake.png") == *renewed);
+	CHECK(project.Assets.GetPath(builtin) == builtinPath);
 }

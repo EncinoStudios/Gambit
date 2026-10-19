@@ -60,7 +60,7 @@ namespace Gambit
 	public:
 		static constexpr AssetType StaticType = AssetType::Mesh;
 
-		// `data` must pass MeshData::Validate (verified); call MeshUtils::ComputeBounds first.
+		// `data` must pass MeshData::Validate (verified); its bounds are computed from the positions.
 		explicit MeshSource(MeshData data);
 
 		[[nodiscard]] AssetType GetType() const noexcept override { return StaticType; }

@@ -57,15 +57,16 @@ namespace Gambit
 	//     DebugLinePass (scene debug lines, engine shapes) -> the target, depth-tested against the view depth
 	//
 	// Draw items are interpolated between their previous and current tick with `alpha`, culled against the view
-	// frustum and sorted (opaque by pipeline, material and mesh; blended back to front). The view targets are sized
-	// per view and kept while views of that size are rendered, so an editor viewport and a game camera of other sizes
-	// can render in the same frame. GPU copies of assets live in RenderResources. Not thread safe; release it before
-	// the device.
+	// frustum and sorted (opaque by pipeline, material and mesh; blended back to front). A draw item's SubmeshIndex
+	// and MaterialOverrides apply to Mesh assets; a Model draws every mesh of its nodes with their own materials (the
+	// options are ignored for it, with a warning). Each view (RenderView::ViewId) has view targets of its own, sized
+	// like its target and kept while it renders, so an editor viewport and a game camera can render in the same
+	// frame. GPU copies of assets live in RenderResources. Not thread safe; release it before the device.
 	class SceneRenderer
 	{
 	public:
 		static constexpr uint32_t MaxLights = 256;
-		// View targets that no Render call used for this many calls are released.
+		// The targets of a view that no Render call used for this many calls are released.
 		static constexpr uint64_t TargetIdleRenders = 16;
 
 		SceneRenderer(GraphicsDevice& device, AssetManager& assets);
@@ -81,9 +82,9 @@ namespace Gambit
 
 		[[nodiscard]] RenderResources& GetResources() noexcept { return *m_Resources; }
 		[[nodiscard]] GraphicsDevice& GetDevice() const noexcept { return m_Device; }
-		// The targets of the views rendered at `size` (the HDR scene color and depth of the latest one); null when no
-		// view of that size was rendered recently.
-		[[nodiscard]] const ViewTargets* FindViewTargets(glm::uvec2 size) const;
+		// The targets of the view with this id (its HDR scene color and depth as of its latest Render); null when it
+		// was not rendered recently.
+		[[nodiscard]] const ViewTargets* FindViewTargets(uint64_t viewId) const;
 		// Releases every view target (they are recreated on demand).
 		void ReleaseViewTargets() noexcept { m_Targets.clear(); }
 
@@ -99,11 +100,13 @@ namespace Gambit
 	private:
 		struct TargetSlot
 		{
+			uint64_t ViewId = 0;
 			ViewTargets Targets;
 			uint64_t LastUsed = 0;
 		};
 
-		[[nodiscard]] Result<ViewTargets*> AcquireTargets(glm::uvec2 size);
+		// The targets of the view, made (again) when it has none of this size.
+		[[nodiscard]] Result<ViewTargets*> AcquireTargets(uint64_t viewId, glm::uvec2 size);
 		// Fills m_Draws (and m_Bounds with the world bounds of the drawn submeshes when `collectBounds`).
 		void BuildDrawList(
 			const RenderScene& scene, const RenderView& view, float alpha, const Frustum& frustum, bool collectBounds,
@@ -137,7 +140,8 @@ namespace Gambit
 		DebugDrawList m_ShapeLines;
 		std::vector<DebugLine> m_Lines;
 		uint32_t m_NextOrder = 0;
-		std::unordered_set<AssetHandle> m_ReportedSubmeshes; // meshes asked for a submesh they lack; lookups only
+		std::unordered_set<AssetHandle> m_ReportedSubmeshes;    // meshes asked for a submesh they lack; lookups only
+		std::unordered_set<AssetHandle> m_ReportedModelOptions; // models drawn with mesh-only options; lookups only
 		bool m_ReportedLightOverflow = false;
 	};
 }

@@ -30,6 +30,7 @@ namespace Gambit
 	RenderView RenderView::FromCamera(const RenderCamera& camera, float alpha, float aspectRatio)
 	{
 		RenderView view;
+		view.ViewId = camera.Entity.GetValue();
 		view.View = glm::inverse(camera.Transform.Interpolate(alpha));
 		view.Projection = MakeProjection(camera.Camera, aspectRatio);
 		view.ClearColor = camera.Camera.ClearColor;

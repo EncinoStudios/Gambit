@@ -6,15 +6,25 @@
 #include "Gambit/ECS/Entity.h"
 #include "Gambit/ECS/Systems/TransformSystem.h"
 #include "Gambit/ECS/World.h"
+#include "Gambit/RHI/Image.h"
 #include "Gambit/Renderer/Material.h"
 #include "Gambit/Renderer/MeshSource.h"
 #include "Gambit/Renderer/Model.h"
 #include "Gambit/Renderer/ModelUtils.h"
 #include "Gambit/Renderer/Texture.h"
+#include "Gambit/Serialization/Json.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
 #include <map>
 #include <numbers>
+#include <span>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 using namespace Gambit;
@@ -48,6 +58,66 @@ namespace
 		return static_cast<size_t>(std::ranges::count_if(entries, [&](const LogEntry& entry) {
 			return entry.Level == LogLevel::Warn && entry.Message.find(text) != std::string::npos;
 		}));
+	}
+
+	// RFC 4648 base64, for the data URIs of the small glTF documents the tests write.
+	std::string EncodeBase64(std::span<const std::byte> bytes)
+	{
+		constexpr std::string_view Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		std::string text;
+		for (size_t index = 0; index < bytes.size(); index += 3)
+		{
+			const size_t left = bytes.size() - index;
+			uint32_t chunk = std::to_integer<uint32_t>(bytes[index]) << 16;
+			chunk |= left > 1 ? std::to_integer<uint32_t>(bytes[index + 1]) << 8 : 0u;
+			chunk |= left > 2 ? std::to_integer<uint32_t>(bytes[index + 2]) : 0u;
+			text += Alphabet[(chunk >> 18) & 63];
+			text += Alphabet[(chunk >> 12) & 63];
+			text += left > 1 ? Alphabet[(chunk >> 6) & 63] : '=';
+			text += left > 2 ? Alphabet[chunk & 63] : '=';
+		}
+		return text;
+	}
+
+	// The binary buffer of a test glTF document: values appended at 4-byte aligned offsets.
+	struct GltfBuffer
+	{
+		std::vector<std::byte> Bytes;
+
+		template<typename T>
+		size_t Append(std::initializer_list<T> values)
+		{
+			const size_t offset = Bytes.size();
+			for (const T value : values)
+			{
+				const auto* begin = reinterpret_cast<const std::byte*>(&value);
+				Bytes.insert(Bytes.end(), begin, begin + sizeof(T));
+			}
+			Bytes.resize((Bytes.size() + 3) / 4 * 4);
+			return offset;
+		}
+
+		[[nodiscard]] std::string GetDataUri() const
+		{
+			return "data:application/octet-stream;base64," + EncodeBase64(Bytes);
+		}
+	};
+
+	// A PNG of `size` x `size` opaque white pixels as a data URI.
+	std::string MakePngDataUri(uint32_t size)
+	{
+		Image image(size, size, ImageFormat::RGBA8);
+		for (uint32_t y = 0; y < size; ++y)
+		{
+			for (uint32_t x = 0; x < size; ++x)
+			{
+				image.SetPixel(x, y, glm::vec4(1.0f));
+			}
+		}
+		const Result<Buffer> png = EncodePng(image);
+		REQUIRE(png.HasValue());
+		return "data:image/png;base64,"
+			+ EncodeBase64(std::span(static_cast<const std::byte*>(png->Data()), png->Size()));
 	}
 }
 
@@ -214,7 +284,9 @@ TEST_CASE("Renderer: glTF sub-assets keep their handles across re-imports")
 	// The old mesh is gone from the file: loading it by its handle fails with a reason.
 	const ScopedLogCapture log;
 	const Result<Ref<Asset>> gone = project.Assets.LoadAsset(first.at("Mesh/Cube"));
-	CHECK_FALSE(gone.HasValue());
+	REQUIRE_FALSE(gone.HasValue());
+	CHECK(gone.GetError().Message.find("contains no sub-asset 'Mesh/Cube'") != std::string::npos);
+	CHECK(log.Contains(LogLevel::Error, "contains no sub-asset 'Mesh/Cube'"));
 
 	// Renaming it back restores the original handle.
 	replace(R"("name": "Box",)", R"("name": "Cube",)");
@@ -294,7 +366,9 @@ TEST_CASE("Renderer: a binary glTF imports strips, fans, quantized data, lights 
 	CHECK(twoMaterials->GetSubmeshes()[1].MaterialSlot == 1);
 	CHECK(twoMaterials->GetSubmeshes()[1].Bounds.Min.z == 0.5f);
 
-	const MaterialData leaf = project.Assets.GetAsset<Material>(subAssets.at("Material/Leaf"))->GetData();
+	const Ref<Material> leafMaterial = project.Assets.GetAsset<Material>(subAssets.at("Material/Leaf"));
+	REQUIRE(leafMaterial != nullptr);
+	const MaterialData leaf = leafMaterial->GetData();
 	CHECK(leaf.Alpha == AlphaMode::Mask);
 	CHECK(leaf.AlphaCutoff == doctest::Approx(0.4f));
 	CHECK(leaf.DoubleSided);
@@ -304,7 +378,9 @@ TEST_CASE("Renderer: a binary glTF imports strips, fans, quantized data, lights 
 	REQUIRE(leafTexture != nullptr);
 	CHECK(leafTexture->GetImage().GetPixel(0, 0).a == 0.0f);
 	CHECK(leafTexture->GetImage().GetPixel(8, 8).a == 1.0f);
-	const MaterialData glow = project.Assets.GetAsset<Material>(subAssets.at("Material/Glow"))->GetData();
+	const Ref<Material> glowMaterial = project.Assets.GetAsset<Material>(subAssets.at("Material/Glow"));
+	REQUIRE(glowMaterial != nullptr);
+	const MaterialData glow = glowMaterial->GetData();
 	CHECK(glow.Alpha == AlphaMode::Blend);
 	CHECK(glow.EmissiveColor == glm::vec3(1.0f, 0.5f, 0.0f));
 	CHECK(glow.EmissiveStrength == 4.0f);
@@ -329,8 +405,12 @@ TEST_CASE("Renderer: a binary glTF imports strips, fans, quantized data, lights 
 	const ModelNode* fanNode = FindNode(*model, "Fan");
 	REQUIRE(fanNode != nullptr);
 	CHECK(NearlyEqual(glm::vec3(fanNode->ModelTransform[3]), glm::vec3(2.0f, 1.0f, 0.0f)));
-	CHECK(FindNode(*model, "Quantized")->Scale == glm::vec3(0.01f));
-	CHECK_FALSE(FindNode(*model, "Points")->Mesh.IsValid());
+	const ModelNode* quantizedNode = FindNode(*model, "Quantized");
+	REQUIRE(quantizedNode != nullptr);
+	CHECK(quantizedNode->Scale == glm::vec3(0.01f));
+	const ModelNode* pointsNode = FindNode(*model, "Points");
+	REQUIRE(pointsNode != nullptr);
+	CHECK_FALSE(pointsNode->Mesh.IsValid());
 
 	const ModelNode* sun = FindNode(*model, "Sun");
 	REQUIRE((sun != nullptr && sun->DirectionalLight.has_value()));
@@ -369,7 +449,9 @@ TEST_CASE("Renderer: glTF data URIs import, and shared names get index keys")
 	const Ref<Texture2D> texture = project.Assets.GetAsset<Texture2D>(subAssets.at("Texture/#0"));
 	REQUIRE(texture != nullptr);
 	CHECK(texture->GetWidth() == 8);
-	CHECK(FindNode(*model, "Second")->Mesh == subAssets.at("Mesh/#1"));
+	const ModelNode* second = FindNode(*model, "Second");
+	REQUIRE(second != nullptr);
+	CHECK(second->Mesh == subAssets.at("Mesh/#1"));
 }
 
 TEST_CASE("Renderer: glTF files that cannot be imported fail with the reason")
@@ -414,6 +496,208 @@ TEST_CASE("Renderer: glTF files that cannot be imported fail with the reason")
 	const Ref<Material> material = project.Assets.GetAsset<Material>(subAssets.at("Material/Painted"));
 	REQUIRE(material != nullptr);
 	CHECK_FALSE(material->GetData().BaseColorTexture.IsValid());
+}
+
+TEST_CASE("Renderer: glTF URIs that leave the project or cannot be read are refused")
+{
+	RendererProject project;
+	const auto loadError = [&](std::string_view path) {
+		project.Assets.Scan();
+		const ScopedLogCapture log;
+		const Result<Ref<Asset>> loaded = project.Assets.LoadAsset(project.Assets.GetHandle(path));
+		REQUIRE_FALSE(loaded.HasValue());
+		return loaded.GetError().Message;
+	};
+
+	// A buffer outside the project is not read: the whole import fails.
+	project.Directory.WriteFile("Outside.bin", std::string(12, '\0'));
+	project.Directory.WriteFile("Assets/Escape.gltf", R"({ "asset": { "version": "2.0" },
+		                           "buffers": [ { "byteLength": 12, "uri": "../../Outside.bin" } ] })");
+	const std::string escape = loadError("Assets/Escape.gltf");
+	CHECK_MESSAGE(escape.find("is not a path inside the project") != std::string::npos, escape);
+
+	// Images that cannot be read cost the material its textures, each with a warning; the import goes on.
+	project.Directory.WriteFile("a.png", "png");
+	project.Directory.WriteFile(
+		"Assets/Images.gltf",
+		R"({ "asset": { "version": "2.0" },
+		     "images": [ { "uri": "https://example.com/a.png" }, { "uri": "../../a.png" },
+		                 { "uri": "data:image/png,abc" }, { "uri": "data:image/png;base64,@@@" }, {} ],
+		     "textures": [ { "source": 0 }, { "source": 1 }, { "source": 2 }, { "source": 3 }, { "source": 4 } ],
+		     "materials": [ { "name": "Bare",
+		                      "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 },
+		                                                "metallicRoughnessTexture": { "index": 1 } },
+		                      "normalTexture": { "index": 2 }, "occlusionTexture": { "index": 3 },
+		                      "emissiveTexture": { "index": 4 } } ] })");
+	project.Assets.Scan();
+	const ScopedLogCapture log;
+	const AssetHandle handle = project.Assets.GetHandle("Assets/Images.gltf");
+	REQUIRE(project.Assets.GetAsset<Model>(handle) != nullptr);
+	CHECK(CountWarnings(log, "image 0 cannot be read: 'https://example.com/a.png' is not a relative file URI") == 1);
+	CHECK(CountWarnings(log, "image 1 cannot be read: '../../a.png' is not a path inside the project") == 1);
+	CHECK(CountWarnings(log, "image 2 cannot be read: its data URI is not base64") == 1);
+	CHECK(CountWarnings(log, "image 3 cannot be read: its data URI is not valid base64") == 1);
+	CHECK(CountWarnings(log, "image 4 cannot be read: it has neither a URI nor a buffer view") == 1);
+	const std::map<std::string, AssetHandle> subAssets = GetSubAssetHandles(project.Assets, handle);
+	CHECK(subAssets.size() == 1); // the material, no texture
+	const Ref<Material> material = project.Assets.GetAsset<Material>(subAssets.at("Material/Bare"));
+	REQUIRE(material != nullptr);
+	CHECK(material->GetDependencies().empty());
+}
+
+TEST_CASE("Renderer: glTF features the importer leaves out are warned about once each (D-045)")
+{
+	RendererProject project;
+	GltfBuffer buffer;
+	const size_t positions = buffer.Append<float>({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+	const size_t joints0 = buffer.Append<uint16_t>({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+	const size_t weights0 = buffer.Append<float>({ 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 });
+	const size_t joints1 = buffer.Append<uint16_t>({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+	const size_t weights1 = buffer.Append<float>({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+	const size_t target = buffer.Append<float>({ 0, 0, 1, 0, 0, 1, 0, 0, 1 });
+	const size_t times = buffer.Append<float>({ 0, 1 });
+	const size_t translations = buffer.Append<float>({ 0, 0, 0, 0, 1, 0 });
+	Json document = Json::parse(R"({
+		"asset": { "version": "2.0" },
+		"extensionsUsed": [ "KHR_texture_transform", "KHR_texture_basisu", "EXT_mesh_gpu_instancing" ],
+		"buffers": [ {} ],
+		"bufferViews": [], "accessors": [],
+		"images": [ {}, { "uri": "Compressed.ktx2", "mimeType": "image/ktx2" } ],
+		"textures": [ { "source": 0 }, { "extensions": { "KHR_texture_basisu": { "source": 1 } } } ],
+		"materials": [
+			{ "name": "Rotated", "pbrMetallicRoughness": { "baseColorTexture": { "index": 0,
+				"extensions": { "KHR_texture_transform": { "rotation": 0.5, "scale": [ 2, 2 ] } } } } },
+			{ "name": "SecondUV", "pbrMetallicRoughness": { "baseColorTexture": { "index": 0, "texCoord": 1 } } },
+			{ "name": "Compressed", "pbrMetallicRoughness": { "baseColorTexture": { "index": 1 } } } ],
+		"meshes": [ { "name": "Skinned", "weights": [ 0 ], "primitives": [ {
+			"attributes": { "POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2, "JOINTS_1": 3, "WEIGHTS_1": 4 },
+			"targets": [ { "POSITION": 5 } ], "material": 0 } ] } ],
+		"skins": [ { "joints": [ 1 ] } ],
+		"animations": [ { "samplers": [ { "input": 6, "output": 7 } ],
+		                  "channels": [ { "sampler": 0, "target": { "node": 1, "path": "translation" } } ] } ],
+		"nodes": [ { "name": "Body", "mesh": 0, "skin": 0,
+		             "extensions": { "EXT_mesh_gpu_instancing": { "attributes": { "TRANSLATION": 8 } } } },
+		           { "name": "Bone" } ],
+		"scenes": [ { "nodes": [ 0, 1 ] } ], "scene": 0 })");
+	document["buffers"][0] = Json{ { "byteLength", buffer.Bytes.size() }, { "uri", buffer.GetDataUri() } };
+	document["images"][0] = Json{ { "uri", MakePngDataUri(2) } };
+	const auto addAccessor = [&](size_t offset, size_t size, int componentType, size_t count, const char* type) {
+		document["bufferViews"].push_back(Json{ { "buffer", 0 }, { "byteOffset", offset }, { "byteLength", size } });
+		document["accessors"].push_back(Json{ { "bufferView", document["bufferViews"].size() - 1 },
+		                                      { "componentType", componentType },
+		                                      { "count", count },
+		                                      { "type", type } });
+	};
+	constexpr int Float = 5126;
+	constexpr int UnsignedShort = 5123;
+	addAccessor(positions, 36, Float, 3, "VEC3");
+	addAccessor(joints0, 24, UnsignedShort, 3, "VEC4");
+	addAccessor(weights0, 48, Float, 3, "VEC4");
+	addAccessor(joints1, 24, UnsignedShort, 3, "VEC4");
+	addAccessor(weights1, 48, Float, 3, "VEC4");
+	addAccessor(target, 36, Float, 3, "VEC3");
+	addAccessor(times, 8, Float, 2, "SCALAR");
+	addAccessor(translations, 24, Float, 2, "VEC3");
+	addAccessor(translations, 24, Float, 2, "VEC3");
+	project.Directory.WriteFile("Assets/Warnings.gltf", document.dump());
+	project.Assets.Scan();
+
+	const ScopedLogCapture log;
+	const AssetHandle handle = project.Assets.GetHandle("Assets/Warnings.gltf");
+	const Ref<Model> model = project.Assets.GetAsset<Model>(handle);
+	REQUIRE(model != nullptr);
+	for (const char* warning :
+	     { "skins and animations are not imported yet", "morph targets are not imported yet",
+	       "EXT_mesh_gpu_instancing is not supported", "the rotation of KHR_texture_transform is ignored",
+	       "samples a texture with TEXCOORD_1; every texture uses TEXCOORD_0",
+	       "texture 1 has no PNG or JPEG image (KTX2 and WebP are not supported)",
+	       "only the first four joint influences per vertex are imported" })
+	{
+		CAPTURE(warning);
+		CHECK(CountWarnings(log, warning) == 1);
+	}
+
+	// What is imported: the first joint set, the base mesh, and the materials with their documented fallbacks.
+	const std::map<std::string, AssetHandle> subAssets = GetSubAssetHandles(project.Assets, handle);
+	const Ref<MeshSource> mesh = project.Assets.GetAsset<MeshSource>(subAssets.at("Mesh/Skinned"));
+	REQUIRE(mesh != nullptr);
+	CHECK(mesh->GetData().Joints.size() == 3);
+	CHECK(mesh->GetData().Weights[1] == glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+	CHECK(mesh->GetData().Positions[2] == glm::vec3(0.0f, 1.0f, 0.0f));
+	const auto materialData = [&](const char* key) {
+		const Ref<Material> material = project.Assets.GetAsset<Material>(subAssets.at(key));
+		REQUIRE(material != nullptr);
+		return material->GetData();
+	};
+	const MaterialData rotated = materialData("Material/Rotated");
+	CHECK(rotated.BaseColorTexture.IsValid());
+	CHECK(rotated.UVTiling == glm::vec2(2.0f)); // scale and offset are kept
+	CHECK(materialData("Material/SecondUV").BaseColorTexture == rotated.BaseColorTexture);
+	CHECK_FALSE(materialData("Material/Compressed").BaseColorTexture.IsValid());
+
+	// Joint indices above 16 bits cannot be stored: that mesh fails to import, with the reason.
+	GltfBuffer wide;
+	const size_t widePositions = wide.Append<float>({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+	const size_t wideJoints = wide.Append<uint32_t>({ 70000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+	const size_t wideWeights = wide.Append<float>({ 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 });
+	Json manyJoints = Json::parse(R"({ "asset": { "version": "2.0" },
+		"meshes": [ { "primitives": [ { "attributes": { "POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2 } } ] } ] })");
+	manyJoints["buffers"] = Json::array({ Json{ { "byteLength", wide.Bytes.size() }, { "uri", wide.GetDataUri() } } });
+	manyJoints["bufferViews"] = Json::array();
+	manyJoints["accessors"] = Json::array();
+	for (const auto& [offset, size, componentType, type] :
+	     { std::tuple{ widePositions, size_t(36), Float, "VEC3" }, std::tuple{ wideJoints, size_t(48), 5125, "VEC4" },
+	       std::tuple{ wideWeights, size_t(48), Float, "VEC4" } })
+	{
+		manyJoints["bufferViews"].push_back(Json{ { "buffer", 0 }, { "byteOffset", offset }, { "byteLength", size } });
+		manyJoints["accessors"].push_back(Json{ { "bufferView", manyJoints["bufferViews"].size() - 1 },
+		                                        { "componentType", componentType },
+		                                        { "count", 3 },
+		                                        { "type", type } });
+	}
+	project.Directory.WriteFile("Assets/ManyJoints.gltf", manyJoints.dump());
+	project.Assets.Scan();
+	const Result<Ref<Asset>> refused = project.Assets.LoadAsset(project.Assets.GetHandle("Assets/ManyJoints.gltf"));
+	REQUIRE_FALSE(refused.HasValue());
+	CHECK_MESSAGE(
+		refused.GetError().Message.find("has a joint index above 65535") != std::string::npos,
+		refused.GetError().Message);
+}
+
+TEST_CASE("Renderer: a glTF primitive without normals gets flat normals and new tangents")
+{
+	// glTF 2.0, 3.7.2.1: tangents given without normals are ignored, since they belong to normals that are not there.
+	RendererProject project;
+	GltfBuffer buffer;
+	const size_t positions = buffer.Append<float>({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+	const size_t tangents = buffer.Append<float>({ 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1 });
+	Json document = Json::parse(R"({ "asset": { "version": "2.0" },
+		"meshes": [ { "name": "Flat", "primitives": [ { "attributes": { "POSITION": 0, "TANGENT": 1 } } ] } ],
+		"nodes": [ { "mesh": 0 } ], "scenes": [ { "nodes": [ 0 ] } ], "scene": 0 })");
+	document["buffers"] =
+		Json::array({ Json{ { "byteLength", buffer.Bytes.size() }, { "uri", buffer.GetDataUri() } } });
+	document["bufferViews"] =
+		Json::array({ Json{ { "buffer", 0 }, { "byteOffset", positions }, { "byteLength", 36 } },
+	                  Json{ { "buffer", 0 }, { "byteOffset", tangents }, { "byteLength", 48 } } });
+	document["accessors"] =
+		Json::array({ Json{ { "bufferView", 0 }, { "componentType", 5126 }, { "count", 3 }, { "type", "VEC3" } },
+	                  Json{ { "bufferView", 1 }, { "componentType", 5126 }, { "count", 3 }, { "type", "VEC4" } } });
+	project.Directory.WriteFile("Assets/Flat.gltf", document.dump());
+	project.Assets.Scan();
+	const AssetHandle handle = project.Assets.GetHandle("Assets/Flat.gltf");
+	REQUIRE(project.Assets.GetAsset<Model>(handle) != nullptr);
+	const Ref<MeshSource> mesh =
+		project.Assets.GetAsset<MeshSource>(GetSubAssetHandles(project.Assets, handle).at("Mesh/Flat"));
+	REQUIRE(mesh != nullptr);
+	const MeshData& data = mesh->GetData();
+	REQUIRE(data.Tangents.size() == data.Positions.size());
+	for (size_t vertex = 0; vertex < data.Positions.size(); ++vertex)
+	{
+		CAPTURE(vertex);
+		CHECK(NearlyEqual(data.Normals[vertex], glm::vec3(0.0f, 0.0f, 1.0f)));
+		CHECK(std::abs(glm::dot(glm::vec3(data.Tangents[vertex]), data.Normals[vertex])) < 1e-4f);
+		CHECK(glm::length(glm::vec3(data.Tangents[vertex])) == doctest::Approx(1.0f));
+	}
 }
 
 TEST_CASE("Renderer: ModelUtils::Instantiate turns a model's nodes into entities")

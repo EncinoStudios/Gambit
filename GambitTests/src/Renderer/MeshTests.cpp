@@ -7,7 +7,11 @@
 #include "Gambit/Renderer/MeshSource.h"
 #include "Gambit/Renderer/MeshUtils.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <limits>
+#include <string>
 #include <vector>
 
 using namespace Gambit;
@@ -99,9 +103,9 @@ TEST_CASE("Renderer: mesh data is validated before it becomes a mesh")
 	failsWith(infinite, "not finite");
 	failsWith(MeshData{}, "needs vertices");
 
-	// A mesh's dependencies are the materials of its slots.
+	// A mesh's dependencies are the materials of its slots. Its bounds are computed from the data (forgetting
+	// MeshUtils::ComputeBounds must not leave an empty box that culling would reject).
 	mesh.Materials = { UUID(9) };
-	MeshUtils::ComputeBounds(mesh);
 	const MeshSource source(mesh);
 	CHECK(source.GetDependencies() == std::vector<AssetHandle>{ UUID(9) });
 	CHECK(source.GetBounds().Min == glm::vec3(-1.0f, -1.0f, 0.0f));
@@ -282,7 +286,11 @@ TEST_CASE("Renderer: every MeshFactory primitive is a closed-form mesh with cons
 		CHECK(degenerate == 0);
 	}
 
-	// Closed shapes: the cube's faces at +-0.5, the sphere's vertices on its radius.
+	// Closed shapes: the cube's corners at +-0.5, the sphere's vertices on its radius.
+	const MeshData cube = MeshFactory::CreateCube();
+	CHECK(std::ranges::all_of(cube.Positions, [](const glm::vec3& position) {
+		return glm::all(glm::equal(glm::abs(position), glm::vec3(0.5f)));
+	}));
 	const MeshData sphere = MeshFactory::CreateSphere(2.0f, 12, 6);
 	for (const glm::vec3& position : sphere.Positions)
 	{
@@ -293,6 +301,40 @@ TEST_CASE("Renderer: every MeshFactory primitive is a closed-form mesh with cons
 	CHECK(plane.Indices.size() == 3 * 3 * 6);
 	CHECK(plane.Bounds.Min == glm::vec3(-2.0f, 0.0f, -1.0f));
 	CHECK(plane.Bounds.Max == glm::vec3(2.0f, 0.0f, 1.0f));
+}
+
+TEST_CASE("Renderer: MeshFactory spheres of any size have the same triangles")
+{
+	// The poles' degenerate triangles are found relative to the sphere's size: a tiny sphere keeps its triangles, and
+	// a huge one loses the slivers at its poles like the unit sphere does.
+	const MeshData unit = MeshFactory::CreateSphere(1.0f, 8, 4);
+	for (const float radius : { 1e-7f, 1e5f })
+	{
+		CAPTURE(radius);
+		const MeshData sphere = MeshFactory::CreateSphere(radius, 8, 4);
+		REQUIRE(sphere.Validate().HasValue());
+		CHECK(sphere.Indices.size() == unit.Indices.size());
+		CHECK(sphere.Bounds.Max.y == doctest::Approx(radius));
+		for (size_t corner = 0; corner < sphere.Indices.size(); corner += 3)
+		{
+			const glm::vec3& a = sphere.Positions[sphere.Indices[corner]];
+			const glm::vec3& b = sphere.Positions[sphere.Indices[corner + 1]];
+			const glm::vec3& c = sphere.Positions[sphere.Indices[corner + 2]];
+			CHECK(glm::length(glm::cross(b - a, c - a)) > 1e-3f * radius * radius);
+		}
+	}
+}
+
+TEST_CASE("Renderer: tangents of a submesh without triangles fail with the reason")
+{
+	MeshData mesh = MakeQuad();
+	mesh.Submeshes[0].IndexCount = 0;
+	const Result<void> tangents = MeshUtils::GenerateTangents(mesh);
+	REQUIRE_FALSE(tangents.HasValue());
+	CHECK_MESSAGE(
+		tangents.GetError().Message.find("submesh 0 has no triangles") != std::string::npos,
+		tangents.GetError().Message);
+	CHECK(mesh.Positions.size() == 4); // the mesh is left as it was
 }
 
 TEST_CASE("Renderer: the primitive meshes and the default material are built-in assets")

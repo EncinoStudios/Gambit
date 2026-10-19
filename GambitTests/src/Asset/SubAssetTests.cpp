@@ -9,6 +9,9 @@
 #include "Gambit/Asset/AssetRegistry.h"
 #include "Gambit/Asset/SubAssetHandles.h"
 
+#include <algorithm>
+#include <array>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -178,9 +181,13 @@ TEST_CASE("Asset: the registry keeps sub-assets with the file that contains them
 	REQUIRE(hull != nullptr);
 	CHECK(hull->IsSubAsset());
 	CHECK(hull->Path == "Assets/Ship.glb");
-	CHECK(registry.FindSubAsset(UUID(1), "Material/Paint")->Handle == UUID(11));
+	const AssetRecord* paint = registry.FindSubAsset(UUID(1), "Material/Paint");
+	REQUIRE(paint != nullptr);
+	CHECK(paint->Handle == UUID(11));
 	CHECK(registry.FindSubAsset(UUID(1), "Mesh/Sail") == nullptr);
-	CHECK(registry.FindByPath("Assets/Ship.glb")->Handle == UUID(1)); // never a sub-asset
+	const AssetRecord* ship = registry.FindByPath("Assets/Ship.glb");
+	REQUIRE(ship != nullptr);
+	CHECK(ship->Handle == UUID(1)); // never a sub-asset
 	CHECK(KeysOf(registry.ListSubAssets(UUID(1))) == std::vector<std::string>{ "Material/Paint", "Mesh/Hull" });
 
 	// Files sorted by path, each followed by its sub-assets sorted by key.
@@ -226,10 +233,14 @@ TEST_CASE("Asset: a scan registers the sub-assets that .meta files list")
 	const ScanReport report = registry.Scan(directory.GetVFS(), directories);
 	CHECK(report.AssetCount == 2);
 	CHECK(registry.GetSubAssetCount() == 1);
-	CHECK(registry.Find(UUID(0x10))->SubAssetKey == "Mesh/Hull");
+	const AssetRecord* hull = registry.Find(UUID(0x10));
+	REQUIRE(hull != nullptr);
+	CHECK(hull->SubAssetKey == "Mesh/Hull");
 	// A sub-asset whose handle a file has is a duplicate and stays unregistered.
 	CHECK(report.Count(ScanIssueKind::DuplicateHandle) == 1);
-	CHECK(registry.Find(UUID(2))->Path == "Assets/Ship.png");
+	const AssetRecord* texture = registry.Find(UUID(2));
+	REQUIRE(texture != nullptr);
+	CHECK(texture->Path == "Assets/Ship.png");
 }
 
 TEST_CASE("Asset: loading a file registers and caches its sub-assets and records new handles")
@@ -291,8 +302,114 @@ TEST_CASE("Asset: loading a file registers and caches its sub-assets and records
 	REQUIRE(copies.size() == 2);
 	CHECK(copies[0].Handle != wheel);
 	CHECK(copies[1].Handle != wheel);
-	CHECK(project.Assets.GetRegistry().Find(wheel)->Parent == file);
+	const AssetRecord* original = project.Assets.GetRegistry().Find(wheel);
+	REQUIRE(original != nullptr);
+	CHECK(original->Parent == file);
 	const Ref<BundleAsset> copy = project.Assets.GetAsset<BundleAsset>(*renewed);
 	REQUIRE(copy != nullptr);
-	CHECK(copy->Parts[0].Handle == project.Assets.GetRegistry().FindSubAsset(*renewed, "Part/Wheel")->Handle);
+	const AssetRecord* copiedWheel = project.Assets.GetRegistry().FindSubAsset(*renewed, "Part/Wheel");
+	REQUIRE(copiedWheel != nullptr);
+	CHECK(copy->Parts[0].Handle == copiedWheel->Handle);
+}
+
+TEST_CASE("Asset: listed sub-asset handles that belong to other assets get new handles at the next load")
+{
+	BundleProject project;
+	project.Directory.WriteFile("Assets/A.glb", "Wheel\n");
+	project.Directory.WriteFile("Assets/B.glb", "Wheel\nAxle\nHub\n");
+	project.Assets.Scan();
+	const AssetHandle fileA = project.Assets.GetHandle("Assets/A.glb");
+	const AssetHandle fileB = project.Assets.GetHandle("Assets/B.glb");
+	const Ref<BundleAsset> bundleA = project.Assets.GetAsset<BundleAsset>(fileA);
+	REQUIRE(bundleA != nullptr);
+	REQUIRE(bundleA->Parts.size() == 1);
+	const AssetHandle wheelA = bundleA->Parts[0].Handle;
+
+	// B's .meta file was merged from another one: it lists A's wheel, B's own handle and a built-in handle.
+	const std::vector<AssetHandle> builtins = project.Assets.ListBuiltinAssets();
+	REQUIRE_FALSE(builtins.empty());
+	const AssetHandle builtin = builtins.front();
+	project.Directory.WriteFile(
+		"Assets/B.glb.meta",
+		std::format(
+			R"({{ "Version": 1, "Handle": "{}", "Type": "Model", "ImportSettings": {{}},
+			     "SubAssets": [ {{ "Key": "Part/Wheel", "Type": "Mesh", "Handle": "{}" }},
+			                    {{ "Key": "Part/Axle", "Type": "Mesh", "Handle": "{}" }},
+			                    {{ "Key": "Part/Hub", "Type": "Mesh", "Handle": "{}" }} ] }})",
+			fileB.ToString(), wheelA.ToString(), fileB.ToString(), builtin.ToString()));
+	{
+		const ScopedLogCapture log;
+		const ScanReport report = project.Assets.Scan();
+		CHECK(report.Count(ScanIssueKind::DuplicateHandle) == 3);
+	}
+
+	const ScopedLogCapture log;
+	const Ref<BundleAsset> bundleB = project.Assets.GetAsset<BundleAsset>(fileB);
+	REQUIRE(bundleB != nullptr);
+	REQUIRE(bundleB->Parts.size() == 3);
+	for (const SubAssetRef& part : bundleB->Parts)
+	{
+		CAPTURE(part.Handle.ToString());
+		CHECK(part.Handle != wheelA);
+		CHECK(part.Handle != fileB);
+		CHECK(part.Handle != builtin);
+		const AssetRecord* record = project.Assets.Find(part.Handle);
+		REQUIRE(record != nullptr);
+		CHECK(record->Parent == fileB);
+		CHECK(project.Assets.GetAsset<PartAsset>(part.Handle) == part.Object);
+	}
+	CHECK(log.Contains(LogLevel::Warn, "Part/Wheel"));
+	// A's wheel stays A's, and the repaired .meta file scans without duplicates.
+	CHECK(project.Assets.GetAsset<PartAsset>(wheelA) == bundleA->Parts[0].Object);
+	const Result<AssetMetadata> metadata = project.Assets.ReadMetadata(fileB);
+	REQUIRE(metadata.HasValue());
+	CHECK(metadata->SubAssets.size() == 3);
+	CHECK(project.Assets.Scan().Count(ScanIssueKind::DuplicateHandle) == 0);
+}
+
+TEST_CASE("Asset: registering a file registers the sub-assets its .meta file lists")
+{
+	BundleProject project;
+	project.Directory.WriteFile("Assets/Old.glb", "Spoke\n");
+	project.Assets.Scan();
+	const AssetHandle old = project.Assets.GetHandle("Assets/Old.glb");
+	REQUIRE(old.IsValid());
+
+	// A model copied in with its .meta file (asset.import): its sub-assets resolve before anything loads it. One entry
+	// claims the handle of another asset: it is not registered (warned), and gets a new handle at the first load.
+	project.Directory.WriteFile("Assets/Parts.glb", "Wheel\nAxle\n");
+	project.Directory.WriteFile(
+		"Assets/Parts.glb.meta",
+		std::format(
+			R"({{ "Version": 1, "Handle": "0x0000000000005000", "Type": "Model", "ImportSettings": {{ "Scale": 2 }},
+			     "SubAssets": [ {{ "Key": "Part/Wheel", "Type": "Mesh", "Handle": "0x0000000000005001" }},
+			                    {{ "Key": "Part/Axle", "Type": "Mesh", "Handle": "{}" }} ] }})",
+			old.ToString()));
+	const ScopedLogCapture log;
+	const Result<AssetHandle> registered = project.Assets.RegisterFile("Assets/Parts.glb");
+	REQUIRE(registered.HasValue());
+	CHECK(*registered == UUID(0x5000));
+	CHECK(log.Contains(LogLevel::Warn, "Part/Axle"));
+	CHECK(project.Assets.GetType(UUID(0x5001)) == AssetType::Mesh);
+	CHECK(project.Assets.GetPath(UUID(0x5001)) == "Assets/Parts.glb");
+	const Ref<PartAsset> wheel = project.Assets.GetAsset<PartAsset>(UUID(0x5001));
+	REQUIRE(wheel != nullptr);
+	CHECK(wheel->Name == "Wheel");
+	CHECK(project.Assets.GetPath(old) == "Assets/Old.glb");
+
+	// A .meta file without a handle gets one; its sub-assets and import settings stay.
+	project.Directory.WriteFile("Assets/Spare.glb", "Wheel\n");
+	project.Directory.WriteFile(
+		"Assets/Spare.glb.meta",
+		R"({ "Version": 1, "Type": "Model", "ImportSettings": { "Scale": 3 },
+		     "SubAssets": [ { "Key": "Part/Wheel", "Type": "Mesh", "Handle": "0x0000000000006001" } ] })");
+	const Result<AssetHandle> spare = project.Assets.RegisterFile("Assets/Spare.glb");
+	REQUIRE(spare.HasValue());
+	const Result<AssetMetadata> metadata = project.Assets.ReadMetadata(*spare);
+	REQUIRE(metadata.HasValue());
+	CHECK(metadata->Handle == *spare);
+	CHECK(metadata->ImportSettings == Json{ { "Scale", 3 } });
+	REQUIRE(metadata->SubAssets.size() == 1);
+	CHECK(metadata->SubAssets[0].Handle == UUID(0x6001));
+	CHECK(project.Assets.Find(UUID(0x6001)) != nullptr);
 }

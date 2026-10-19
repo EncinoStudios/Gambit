@@ -40,14 +40,22 @@ namespace Gambit
 					mesh.UV0.push_back({ u, v });
 				}
 			}
-			// Corners closer than this (the poles, where sin(pi) is not exactly 0) make a triangle degenerate.
-			constexpr float CoincidentDistance = 1e-6f;
-			const auto addTriangle = [&mesh](uint32_t a, uint32_t b, uint32_t c) {
-				const glm::vec3& pa = mesh.Positions[a];
-				const glm::vec3& pb = mesh.Positions[b];
-				const glm::vec3& pc = mesh.Positions[c];
-				if (glm::distance(pa, pb) < CoincidentDistance || glm::distance(pb, pc) < CoincidentDistance
-				    || glm::distance(pa, pc) < CoincidentDistance)
+			// Corners closer than this fraction of the surface's size (the poles, where sin(pi) is not exactly 0) make
+			// a triangle degenerate. Relative, so that tiny and huge shapes lose the same triangles; the positions are
+			// scaled to unit size first, so the distances cannot underflow.
+			constexpr float CoincidentFraction = 1e-6f;
+			float extent = 0.0f;
+			for (auto position = mesh.Positions.begin() + base; position != mesh.Positions.end(); ++position)
+			{
+				extent = std::max({ extent, std::abs(position->x), std::abs(position->y), std::abs(position->z) });
+			}
+			const float toUnit = extent > 0.0f ? 1.0f / extent : 1.0f;
+			const auto addTriangle = [&mesh, toUnit](uint32_t a, uint32_t b, uint32_t c) {
+				const glm::vec3 pa = mesh.Positions[a] * toUnit;
+				const glm::vec3 pb = mesh.Positions[b] * toUnit;
+				const glm::vec3 pc = mesh.Positions[c] * toUnit;
+				if (glm::distance(pa, pb) < CoincidentFraction || glm::distance(pb, pc) < CoincidentFraction
+				    || glm::distance(pa, pc) < CoincidentFraction)
 				{
 					return;
 				}

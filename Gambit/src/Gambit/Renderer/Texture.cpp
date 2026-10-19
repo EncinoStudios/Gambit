@@ -114,38 +114,25 @@ namespace Gambit
 		}
 		const auto* bytes = reinterpret_cast<const stbi_uc*>(data.Data());
 		const int length = static_cast<int>(data.Size());
+		if (stbi_is_hdr_from_memory(bytes, length) == 0)
+		{
+			// Every 8- and 16-bit format stb_image reads, as RGBA8.
+			return DecodePng(data);
+		}
 		int width = 0;
 		int height = 0;
 		int channels = 0;
-		if (stbi_info_from_memory(bytes, length, &width, &height, &channels) == 0)
-		{
-			return Error::Format("not a readable image (PNG, JPEG, TGA, BMP or HDR): {}", stbi_failure_reason());
-		}
-		if (stbi_is_hdr_from_memory(bytes, length) != 0)
-		{
-			float* pixels = stbi_loadf_from_memory(bytes, length, &width, &height, &channels, 4);
-			if (pixels == nullptr)
-			{
-				return Error::Format("cannot decode the HDR image: {}", stbi_failure_reason());
-			}
-			const size_t size = size_t(width) * size_t(height) * 4 * sizeof(float);
-			std::vector<std::byte> copy(size);
-			std::memcpy(copy.data(), pixels, size);
-			stbi_image_free(pixels);
-			return Image::Create(
-				static_cast<uint32_t>(width), static_cast<uint32_t>(height), ImageFormat::RGBA32F, std::move(copy));
-		}
-		stbi_uc* pixels = stbi_load_from_memory(bytes, length, &width, &height, &channels, 4);
+		float* pixels = stbi_loadf_from_memory(bytes, length, &width, &height, &channels, 4);
 		if (pixels == nullptr)
 		{
-			return Error::Format("cannot decode the image: {}", stbi_failure_reason());
+			return Error::Format("cannot decode the HDR image: {}", stbi_failure_reason());
 		}
-		const size_t size = size_t(width) * size_t(height) * 4;
+		const size_t size = size_t(width) * size_t(height) * 4 * sizeof(float);
 		std::vector<std::byte> copy(size);
 		std::memcpy(copy.data(), pixels, size);
 		stbi_image_free(pixels);
 		return Image::Create(
-			static_cast<uint32_t>(width), static_cast<uint32_t>(height), ImageFormat::RGBA8, std::move(copy));
+			static_cast<uint32_t>(width), static_cast<uint32_t>(height), ImageFormat::RGBA32F, std::move(copy));
 	}
 
 	Result<TextureImportSettings>

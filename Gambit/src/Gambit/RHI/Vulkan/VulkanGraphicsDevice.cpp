@@ -3,8 +3,8 @@
 #include "Gambit/RHI/Vulkan/VulkanGraphicsDevice.h"
 
 #include "Gambit/Core/Version.h"
+#include "Gambit/Platform/Vulkan/VulkanLoader.h"
 #include "Gambit/Platform/Window.h"
-#include "Gambit/RHI/Vulkan/VulkanLoader.h"
 
 #include <nvrhi/utils.h>
 #include <nvrhi/validation.h>

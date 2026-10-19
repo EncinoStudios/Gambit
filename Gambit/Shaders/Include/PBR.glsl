@@ -8,14 +8,14 @@ const float Pi = 3.14159265358979;
 // Below this perceptual roughness GGX highlights of punctual lights alias to single pixels.
 const float MinRoughness = 0.045;
 
-float D_GGX(float NoH, float alpha)
+float DistributionGGX(float NoH, float alpha)
 {
 	float a2 = alpha * alpha;
 	float f = (NoH * a2 - NoH) * NoH + 1.0;
 	return a2 / (Pi * f * f);
 }
 
-float V_SmithGGXCorrelated(float NoV, float NoL, float alpha)
+float VisibilitySmithGGXCorrelated(float NoV, float NoL, float alpha)
 {
 	float a2 = alpha * alpha;
 	float lambdaV = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
@@ -23,7 +23,7 @@ float V_SmithGGXCorrelated(float NoV, float NoL, float alpha)
 	return 0.5 / max(lambdaV + lambdaL, 1e-7);
 }
 
-vec3 F_Schlick(float VoH, vec3 f0)
+vec3 FresnelSchlick(float VoH, vec3 f0)
 {
 	float f = pow(1.0 - VoH, 5.0);
 	return f0 + (vec3(1.0) - f0) * f;
@@ -39,7 +39,7 @@ vec3 EvaluateBRDF(vec3 N, vec3 V, vec3 L, vec3 diffuseColor, vec3 f0, float roug
 	float NoH = clamp(dot(N, H), 0.0, 1.0);
 	float VoH = clamp(dot(V, H), 0.0, 1.0);
 	float alpha = roughness * roughness;
-	vec3 specular = D_GGX(NoH, alpha) * V_SmithGGXCorrelated(NoV, NoL, alpha) * F_Schlick(VoH, f0);
+	vec3 specular = DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * FresnelSchlick(VoH, f0);
 	vec3 diffuse = diffuseColor / Pi;
 	return (diffuse + specular) * NoL;
 }

@@ -3,6 +3,7 @@
 #include "Gambit/Renderer/GltfImporter.h"
 
 #include "Gambit/Core/FileSystem.h"
+#include "Gambit/Renderer/Components/RenderComponents.h"
 #include "Gambit/Renderer/Material.h"
 #include "Gambit/Renderer/MeshUtils.h"
 #include "Gambit/Renderer/Model.h"
@@ -12,7 +13,6 @@
 
 #include <cstdlib>
 #include <limits>
-#include <numbers>
 #include <numeric>
 
 namespace Gambit
@@ -23,9 +23,6 @@ namespace Gambit
 		constexpr std::array<std::string_view, 4> SupportedRequiredExtensions = {
 			"KHR_mesh_quantization", "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_lights_punctual"
 		};
-
-		// Lumens of a point (or spot) light per candela of luminous intensity: 4 pi steradians.
-		constexpr float LumensPerCandela = 4.0f * std::numbers::pi_v<float>;
 
 		std::string_view Describe(cgltf_result result)
 		{
@@ -630,7 +627,6 @@ namespace Gambit
 					Warn(std::format("mesh {} has no triangles; it is not imported", meshIndex));
 					return std::optional<MeshData>();
 				}
-				MeshUtils::ComputeBounds(mesh);
 				if (Result<void> valid = mesh.Validate(); !valid)
 				{
 					return valid.GetError();
@@ -852,6 +848,9 @@ namespace Gambit
 
 				if (mesh.Normals.empty())
 				{
+					// glTF 2.0, 3.7.2.1: without normals, flat normals are computed and the file's tangents ignored
+					// (they do not belong to the new normals); MikkTSpace makes new ones below.
+					mesh.Tangents.clear();
 					MeshUtils::GenerateFlatNormals(mesh);
 				}
 				if (mesh.Tangents.empty())

@@ -170,6 +170,13 @@ namespace Gambit::MeshUtils
 		{
 			return Error("tangents need normals");
 		}
+		for (size_t index = 0; index < mesh.Submeshes.size(); ++index)
+		{
+			if (mesh.Submeshes[index].IndexCount < 3)
+			{
+				return Error::Format("submesh {} has no triangles", index);
+			}
+		}
 		if (mesh.UV0.empty())
 		{
 			mesh.Tangents.resize(mesh.Positions.size());

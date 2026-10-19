@@ -14,7 +14,7 @@ layout(push_constant) uniform TonemapConstants
 	uint EncodeSrgb;
 } u_Tonemap;
 
-layout(location = 0) in vec2 inUV;
+layout(location = 0) in vec2 v_UV;
 
 layout(location = 0) out vec4 o_Color;
 

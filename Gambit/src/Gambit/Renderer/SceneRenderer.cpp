@@ -12,14 +12,10 @@
 #include "Gambit/Renderer/Passes/TonemapPass.h"
 #include "Gambit/Renderer/RenderResources.h"
 
-#include <numbers>
-
 namespace Gambit
 {
 	namespace
 	{
-		// Lumens of a point or spot light per candela of luminous intensity: 4 pi steradians.
-		constexpr float LumensPerCandela = 4.0f * std::numbers::pi_v<float>;
 		// The farthest a debug camera frustum is drawn (a far plane of 1000 would hide everything else).
 		constexpr float MaxDebugFrustumDepth = 100.0f;
 		// Above this angle a spot light's cone is a hemisphere: tan() and the cone shape degenerate.
@@ -147,22 +143,20 @@ namespace Gambit
 
 	SceneRenderer::~SceneRenderer() = default;
 
-	const ViewTargets* SceneRenderer::FindViewTargets(glm::uvec2 size) const
+	const ViewTargets* SceneRenderer::FindViewTargets(uint64_t viewId) const
 	{
-		const auto found =
-			std::ranges::find_if(m_Targets, [size](const TargetSlot& slot) { return slot.Targets.Size == size; });
+		const auto found = std::ranges::find(m_Targets, viewId, &TargetSlot::ViewId);
 		return found != m_Targets.end() ? &found->Targets : nullptr;
 	}
 
-	Result<ViewTargets*> SceneRenderer::AcquireTargets(glm::uvec2 size)
+	Result<ViewTargets*> SceneRenderer::AcquireTargets(uint64_t viewId, glm::uvec2 size)
 	{
-		// Targets of sizes no view uses any more go (the GPU keeps them until the frames using them are done).
-		std::erase_if(m_Targets, [this, size](const TargetSlot& slot) {
-			return slot.Targets.Size != size && m_RenderCount - slot.LastUsed > TargetIdleRenders;
+		// The targets of views that stopped rendering go (the GPU keeps them until the frames using them are done).
+		std::erase_if(m_Targets, [this, viewId](const TargetSlot& slot) {
+			return slot.ViewId != viewId && m_RenderCount - slot.LastUsed > TargetIdleRenders;
 		});
-		const auto found =
-			std::ranges::find_if(m_Targets, [size](const TargetSlot& slot) { return slot.Targets.Size == size; });
-		if (found != m_Targets.end())
+		auto found = std::ranges::find(m_Targets, viewId, &TargetSlot::ViewId);
+		if (found != m_Targets.end() && found->Targets.Size == size)
 		{
 			found->LastUsed = m_RenderCount;
 			return &found->Targets;
@@ -198,8 +192,15 @@ namespace Gambit
 		{
 			return Error::Format("NVRHI could not create the {}x{} view framebuffers (see the log)", size.x, size.y);
 		}
-		m_Targets.push_back({ std::move(targets), m_RenderCount });
-		return &m_Targets.back().Targets;
+		if (found == m_Targets.end())
+		{
+			m_Targets.push_back({ viewId, {}, m_RenderCount });
+			found = std::prev(m_Targets.end());
+		}
+		// A resized view replaces its targets.
+		found->Targets = std::move(targets);
+		found->LastUsed = m_RenderCount;
+		return &found->Targets;
 	}
 
 	PackedLights
@@ -353,12 +354,6 @@ namespace Gambit
 		for (uint32_t index = first; index < first + count; ++index)
 		{
 			const Submesh& submesh = mesh->Submeshes[index];
-			const AABB bounds = submesh.Bounds.Transformed(world);
-			if (!frustum.Intersects(bounds))
-			{
-				++stats.CulledDraws;
-				continue;
-			}
 			const uint32_t slot = submesh.MaterialSlot;
 			AssetHandle materialHandle = slot < materialOverrides.size() && materialOverrides[slot].IsValid()
 				? materialOverrides[slot]
@@ -367,10 +362,19 @@ namespace Gambit
 			{
 				materialHandle = Material::DefaultHandle;
 			}
+			// Asked for before culling: what the scene uses stays on the GPU while it is out of view (RenderResources
+			// releases what nobody asks for).
+			const GpuMaterial& material = m_Resources->GetMaterial(materialHandle);
+			const AABB bounds = submesh.Bounds.Transformed(world);
+			if (!frustum.Intersects(bounds))
+			{
+				++stats.CulledDraws;
+				continue;
+			}
 			DrawCommand draw;
 			draw.Mesh = mesh;
 			draw.SubmeshIndex = index;
-			draw.Material = &m_Resources->GetMaterial(materialHandle);
+			draw.Material = &material;
 			draw.MeshHandle = meshHandle;
 			draw.MaterialHandle = materialHandle;
 			draw.Constants = constants;
@@ -404,14 +408,21 @@ namespace Gambit
 				{
 					continue;
 				}
-				// A model draws every submesh of every node's mesh; overrides apply to the slots of each mesh.
+				// A model draws every submesh of every node's mesh with the mesh's materials: a submesh index or a
+				// material slot means nothing across the meshes of a model.
+				if ((item.SubmeshIndex >= 0 || !item.MaterialOverrides.empty())
+				    && m_ReportedModelOptions.insert(item.Mesh).second)
+				{
+					GB_CORE_WARN(
+						"Renderer: model {} is drawn with a SubmeshIndex or MaterialOverrides, which apply to meshes "
+						"only; they are ignored (reported once)",
+						item.Mesh.ToString());
+				}
 				for (const ModelNode& node : model->GetNodes())
 				{
 					if (node.Mesh.IsValid())
 					{
-						AddMesh(
-							node.Mesh, world * node.ModelTransform, -1, item.MaterialOverrides, view, frustum,
-							collectBounds, stats);
+						AddMesh(node.Mesh, world * node.ModelTransform, -1, {}, view, frustum, collectBounds, stats);
 					}
 				}
 				continue;
@@ -443,7 +454,7 @@ namespace Gambit
 		++m_RenderCount;
 		m_Resources->BeginFrame();
 		const glm::uvec2 size(targetInfo.width, targetInfo.height);
-		Result<ViewTargets*> targets = AcquireTargets(size);
+		Result<ViewTargets*> targets = AcquireTargets(view.ViewId, size);
 		if (!targets)
 		{
 			return targets.GetError();
@@ -474,7 +485,7 @@ namespace Gambit
 		constants.AmbientRadiance =
 			glm::vec4(scene.Environment.AmbientColor * scene.Environment.AmbientLuminance * exposure, 0.0f);
 		constants.Exposure = exposure;
-		constants.Time = view.Time;
+		constants.Time = static_cast<float>(scene.GetTime(alpha));
 		constants.LightCount = stats.Lights;
 
 		m_Lines.clear();

@@ -45,6 +45,15 @@ namespace Gambit
 		return found;
 	}
 
+	double RenderScene::GetTime(float alpha) const
+	{
+		if (alpha >= 1.0f)
+		{
+			return Time;
+		}
+		return PreviousTime + (Time - PreviousTime) * static_cast<double>(std::max(alpha, 0.0f));
+	}
+
 	void RenderScene::Clear()
 	{
 		Cameras.clear();
@@ -55,5 +64,7 @@ namespace Gambit
 		Environment = {};
 		DebugLines.clear();
 		Tick = 0;
+		Time = 0.0;
+		PreviousTime = 0.0;
 	}
 }

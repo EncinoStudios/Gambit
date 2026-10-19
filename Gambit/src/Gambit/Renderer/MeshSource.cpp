@@ -2,6 +2,8 @@
 
 #include "Gambit/Renderer/MeshSource.h"
 
+#include "Gambit/Renderer/MeshUtils.h"
+
 #include <set>
 
 namespace Gambit
@@ -94,6 +96,8 @@ namespace Gambit
 	{
 		const Result<void> valid = m_Data.Validate();
 		GB_CORE_VERIFY(valid.HasValue(), "invalid mesh data: {}", valid.GetError().Message);
+		// Computed here rather than trusted: empty bounds from a builder that forgot them would cull the mesh forever.
+		MeshUtils::ComputeBounds(m_Data);
 	}
 
 	std::vector<AssetHandle> MeshSource::GetDependencies() const

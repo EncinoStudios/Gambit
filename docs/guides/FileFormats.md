@@ -157,7 +157,9 @@ assets (glTF models, D-038) list them with their handles, so that re-importing k
 ```
 
 The import adds the keys it sees for the first time; keys are never removed, so a mesh that disappears from the file and
-comes back gets its old handle. Keys and handles are unique. Commit the `.meta` files together with the assets. A scan of the
+comes back gets its old handle. Keys and handles are unique. A listed handle that another asset has (a `.meta` file
+merged from another one, or a built-in handle) is not registered by the scan, and the next import gives its key a new
+handle and rewrites the `.meta` file, with a warning. Commit the `.meta` files together with the assets. A scan of the
 project (`AssetManager::Scan`) finds every file whose name says it is an asset (`DetectAssetType`: `.gscene` `.gprefab`
 `.png` `.jpg` `.tga` `.bmp` (textures), `.hdr` (environments), `.glb` `.gltf` (models), `.gmat` `.lua` `.wav` `.ogg`
 `.ttf` `.svg` `.csv`, and `InputActions.json`) below the
@@ -166,7 +168,8 @@ warns about:
 
 - **duplicate handles** (a file copied together with its `.meta`): the file that had the handle before the scan keeps
   it (on the first scan, the first file in path order), the other is not registered until it gets a new one
-  (`AssetManager::AssignNewHandle`); nothing is rewritten on its own;
+  (`AssetManager::AssignNewHandle`); nothing is rewritten on its own. Built-in handles (D-039) always win: a project
+  asset that claims one is reported the same way;
 - **orphaned** `.meta` files whose asset is gone (never deleted);
 - **unreadable** `.meta` files (the asset is not registered and the file is not touched);
 - a `.meta` file without a handle (a new one is assigned and the settings are kept) or with another type than the file

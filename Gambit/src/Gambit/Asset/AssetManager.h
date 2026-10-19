@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <map>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -74,7 +75,8 @@ namespace Gambit
 		// The project-relative directories Scan covers. Call Scan afterwards.
 		void SetAssetDirectories(std::vector<std::string> directories) { m_AssetDirectories = std::move(directories); }
 		// Rebuilds the registry from the files (see AssetRegistry::Scan) and drops loaded assets that are gone or
-		// moved.
+		// moved. A project asset whose .meta file claims a built-in handle is reported as a DuplicateHandle and not
+		// registered (built-ins take precedence, D-039).
 		ScanReport Scan(const ScanOptions& options = {});
 		[[nodiscard]] const AssetRegistry& GetRegistry() const noexcept { return m_Registry; }
 
@@ -96,7 +98,11 @@ namespace Gambit
 		// Replaces the import settings in the .meta file. Loaded assets are not reloaded.
 		[[nodiscard]] Result<void> SetImportSettings(AssetHandle handle, Json settings);
 		// Makes an existing file of the project an asset (importing it): creates its .meta file with the settings,
-		// unless the file has a valid one, and registers it. Returns the handle of an asset that is registered already.
+		// unless the file has a valid one, and registers it with the sub-assets its .meta file lists (those whose
+		// handle another asset has are left out, with a warning). A .meta file without a handle gets one and keeps its
+		// sub-assets, and its import settings unless `importSettings` holds some. Fails when the .meta file's handle
+		// belongs to another asset, built-ins included (AssignNewHandle is the way out). Returns the handle of an
+		// asset that is registered already.
 		[[nodiscard]] Result<AssetHandle> RegisterFile(std::string_view path, Json importSettings = Json::object());
 		// Gives the file a new handle in its .meta file and in the registry (the way out of a DuplicateHandle after a
 		// file was copied), and its sub-assets new handles too. References to the old handles stay with the original.
@@ -106,8 +112,8 @@ namespace Gambit
 
 		// Loads the asset unless it is loaded, and returns it. Failures are logged once, remembered, and returned by
 		// later calls until ReloadAsset. Loading a file registers and caches its sub-assets; when the import produced
-		// sub-assets the .meta file did not list yet, their handles are added to it. Loading a sub-asset loads its
-		// file.
+		// sub-assets the .meta file did not list yet, their handles are added to it (and listed handles that belong to
+		// other assets are replaced). Loading a sub-asset loads its file.
 		[[nodiscard]] Result<Ref<Asset>> LoadAsset(AssetHandle handle);
 		// The loaded asset as T, nullptr (and an error in the log) when it cannot be loaded or is not a T.
 		template<typename T>
@@ -163,6 +169,8 @@ namespace Gambit
 		[[nodiscard]] Result<Ref<Asset>> LoadBuiltin(AssetHandle handle, const BuiltinAsset& builtin);
 		[[nodiscard]] Result<Ref<Asset>> LoadFile(const AssetRecord& record);
 		[[nodiscard]] Result<Ref<Asset>> LoadSubAsset(const AssetRecord& record);
+		// Registers the sub-assets a file's .meta file lists, warning about (and skipping) handles that are taken.
+		void RegisterListedSubAssets(const AssetRecord& file, std::span<const SubAssetEntry> entries);
 		// Registers (when new) and caches the sub-assets of a loaded file.
 		void AddSubAssets(const AssetRecord& file, const Asset& asset, const SubAssetHandles& handles);
 		// Forgets the cached file and its sub-assets.

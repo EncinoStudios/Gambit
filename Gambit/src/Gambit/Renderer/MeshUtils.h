@@ -19,7 +19,8 @@ namespace Gambit
 		// tangents follow +U and the sign makes sign * cross(normal, tangent) point up the image (-V, glTF's UVs
 		// start at the top left), without UV0 they are an arbitrary unit vector perpendicular to the normal. Vertices
 		// whose corners get different tangents (UV seams, mirrored UVs) are split, identical ones merged, so the vertex
-		// count can change; the order of first use is kept, which makes the result deterministic.
+		// count can change; the order of first use is kept, which makes the result deterministic. Fails, leaving the
+		// mesh as it was, without normals or for a submesh without triangles.
 		[[nodiscard]] Result<void> GenerateTangents(MeshData& mesh);
 
 		// Indices of a triangle strip / fan as a triangle list with the winding of the first triangle (glTF 2.0,

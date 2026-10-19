@@ -90,11 +90,24 @@ namespace Gambit
 
 	RenderResources::~RenderResources() = default;
 
+	void RenderResources::BeginFrame()
+	{
+		++m_Frame;
+		const auto idle = [this](const auto& entry) {
+			return m_Frame - entry.second.CheckedFrame > IdleFramesBeforeRelease;
+		};
+		std::erase_if(m_Meshes, idle);
+		std::erase_if(m_Textures, idle);
+		std::erase_if(m_Materials, idle);
+		std::erase_if(m_Models, idle);
+	}
+
 	void RenderResources::Clear()
 	{
 		m_Meshes.clear();
 		m_Textures.clear();
 		m_Materials.clear();
+		m_Models.clear();
 		m_Reported.clear();
 	}
 
@@ -124,7 +137,6 @@ namespace Gambit
 			ReportOnce(handle, asset.GetError().Message);
 			return nullptr;
 		}
-		m_Reported.erase(handle);
 		return std::static_pointer_cast<T>(*asset);
 	}
 
@@ -327,24 +339,38 @@ namespace Gambit
 			entry.Source.reset();
 			return nullptr;
 		}
-		if (entry.Object == nullptr || entry.Source.lock() != mesh)
+		if (entry.Source != mesh)
 		{
+			// Another object for the handle: made (and, failing, reported) anew.
+			m_Reported.erase(handle);
+			entry.Source = mesh;
+			entry.Object.reset();
 			Result<GpuMesh> created = CreateMesh(mesh->GetData(), mesh->GetPath());
 			if (!created)
 			{
 				ReportOnce(handle, created.GetError().Message);
-				entry.Object.reset();
 				return nullptr;
 			}
 			entry.Object = CreateScope<GpuMesh>(std::move(*created));
-			entry.Source = mesh;
 		}
 		return entry.Object.get();
 	}
 
 	Ref<Model> RenderResources::GetModel(AssetHandle handle)
 	{
-		return LoadTyped<Model>(handle);
+		ModelEntry& entry = m_Models[handle];
+		if (entry.CheckedFrame != m_Frame)
+		{
+			entry.CheckedFrame = m_Frame;
+			Ref<Model> model = LoadTyped<Model>(handle);
+			if (model != nullptr && model != entry.Source)
+			{
+				// A model has no GPU copy that could fail: once it loads, a later failure is news again.
+				m_Reported.erase(handle);
+			}
+			entry.Source = std::move(model);
+		}
+		return entry.Source;
 	}
 
 	const GpuTexture& RenderResources::GetTexture(AssetHandle handle, DefaultTexture fallback)
@@ -364,18 +390,19 @@ namespace Gambit
 				entry.Object.reset();
 				entry.Source.reset();
 			}
-			else if (entry.Object == nullptr || entry.Source.lock() != texture)
+			else if (entry.Source != texture)
 			{
+				m_Reported.erase(handle);
+				entry.Source = texture;
+				entry.Object.reset();
 				Result<GpuTexture> created = CreateTexture(*texture, texture->GetPath());
 				if (created)
 				{
 					entry.Object = CreateScope<GpuTexture>(std::move(*created));
-					entry.Source = texture;
 				}
 				else
 				{
 					ReportOnce(handle, created.GetError().Message);
-					entry.Object.reset();
 				}
 			}
 		}
@@ -459,26 +486,28 @@ namespace Gambit
 			else
 			{
 				const auto textures = GetMaterialTextures(material->GetData());
-				// The binding set holds the textures it was made with, so their addresses cannot be reused while it
-				// lives: comparing them tells whether a texture was replaced.
-				std::array<nvrhi::ITexture*, Gpu::MaterialTextureCount> bound{};
+				std::array<nvrhi::TextureHandle, Gpu::MaterialTextureCount> bound{};
 				std::ranges::transform(
-					textures, bound.begin(), [](const GpuTexture* texture) { return texture->Texture.Get(); });
-				if (entry.Object == nullptr || entry.Source.lock() != material
-				    || entry.Version != material->GetVersion() || entry.Textures != bound)
+					textures, bound.begin(), [](const GpuTexture* texture) { return texture->Texture; });
+				const bool changed = entry.Source != material || entry.Version != material->GetVersion();
+				if (changed || entry.Textures != bound)
 				{
+					if (changed)
+					{
+						m_Reported.erase(handle);
+					}
+					entry.Source = material;
+					entry.Version = material->GetVersion();
+					entry.Textures = bound;
+					entry.Object.reset();
 					Result<Scope<GpuMaterial>> created = CreateMaterial(material->GetData(), textures);
 					if (created)
 					{
 						entry.Object = std::move(*created);
-						entry.Source = material;
-						entry.Version = material->GetVersion();
-						entry.Textures = bound;
 					}
 					else
 					{
 						ReportOnce(handle, created.GetError().Message);
-						entry.Object.reset();
 					}
 				}
 			}

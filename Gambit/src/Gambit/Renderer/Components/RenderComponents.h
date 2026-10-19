@@ -4,6 +4,7 @@
 #include "Gambit/Math/Math.h"
 
 #include <cstdint>
+#include <numbers>
 #include <vector>
 
 // The components the renderer reads (D-020: plain data). Render extraction copies them into a RenderScene every tick
@@ -46,6 +47,10 @@ namespace Gambit
 		bool Primary = true;
 		glm::vec4 ClearColor{ 0.05f, 0.05f, 0.06f, 1.0f }; // linear RGBA, what is behind everything
 	};
+
+	// Lumens of a point or spot light per candela of luminous intensity in every direction: 4 pi steradians (the light
+	// components hold lumens, glTF and the shaders candela).
+	inline constexpr float LumensPerCandela = 4.0f * std::numbers::pi_v<float>;
 
 	// Sunlight: parallel rays along the entity's -Z axis.
 	struct DirectionalLightComponent

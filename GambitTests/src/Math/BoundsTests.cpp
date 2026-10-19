@@ -3,6 +3,7 @@
 #include "Gambit/Math/Bounds.h"
 
 #include <array>
+#include <cmath>
 #include <vector>
 
 using namespace Gambit;

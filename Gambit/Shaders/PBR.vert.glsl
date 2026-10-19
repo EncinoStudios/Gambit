@@ -26,9 +26,12 @@ void main()
 	vec4 worldPosition = u_Draw.Model * vec4(a_Position, 1.0);
 	gl_Position = u_Frame.ViewProjection * worldPosition;
 	v_WorldPosition = worldPosition.xyz;
-	// Not normalized: MikkTSpace's convention reconstructs the bitangent from the interpolated vectors as they are.
-	v_Normal = GetNormalMatrix() * a_Normal;
-	v_Tangent = vec4(mat3(u_Draw.Model) * a_Tangent.xyz, a_Tangent.w * u_Draw.NormalMatrix[0].w);
+	// MikkTSpace bakes normal maps against a unit tangent frame, so the transformed vectors are normalized here, per
+	// vertex: under a scale s the normal would have length 1 / s and the tangent s, weighting the map's components by
+	// (s, 1, 1 / s). The pixel shader then uses the interpolated vectors as they are (MikkTSpace's convention). A zero
+	// tangent gives NaN, which the pixel shader replaces with the plain normal.
+	v_Normal = normalize(GetNormalMatrix() * a_Normal);
+	v_Tangent = vec4(normalize(mat3(u_Draw.Model) * a_Tangent.xyz), a_Tangent.w * u_Draw.NormalMatrix[0].w);
 	v_UV = TransformUV(a_UV0);
 	v_Color = a_Color;
 }

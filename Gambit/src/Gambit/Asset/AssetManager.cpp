@@ -3,6 +3,7 @@
 #include "Gambit/Asset/AssetManager.h"
 
 #include <set>
+#include <span>
 
 namespace Gambit
 {
@@ -87,6 +88,29 @@ namespace Gambit
 	ScanReport AssetManager::Scan(const ScanOptions& options)
 	{
 		ScanReport report = m_Registry.Scan(*m_Vfs, m_AssetDirectories, options);
+		// Built-in handles take precedence (D-039): a project asset that claims one is a duplicate like any other and
+		// stays unregistered (a file with its sub-assets) until AssignNewHandle gives it a handle of its own.
+		for (const auto& [handle, builtin] : m_Builtins)
+		{
+			const AssetRecord* claimant = m_Registry.Find(handle);
+			if (claimant == nullptr)
+			{
+				continue;
+			}
+			const std::string path = claimant->Path;
+			std::string message = claimant->IsSubAsset()
+				? std::format(
+					  "the sub-asset '{}' has the handle {} of the built-in asset '{}'; it is not registered",
+					  claimant->SubAssetKey, handle.ToString(), builtin.Name)
+				: std::format(
+					  "handle {} belongs to the built-in asset '{}'; this asset is not registered until it gets a new "
+					  "handle",
+					  handle.ToString(), builtin.Name);
+			GB_CORE_WARN("Asset scan: {}: {}", path, message);
+			report.Issues.push_back({ ScanIssueKind::DuplicateHandle, path, std::move(message), false });
+			m_Registry.Remove(handle);
+		}
+		report.AssetCount = m_Registry.GetCount();
 		// Cached assets stay only when their file is still where they were loaded from (built-in assets have no file);
 		// failures get another chance.
 		std::erase_if(m_Cache, [this](const auto& entry) {
@@ -222,6 +246,9 @@ namespace Gambit
 
 		AssetRecord record{ AssetHandle(), *normalized, type };
 		const std::string metaPath = AssetMetadata::GetMetaPath(*normalized);
+		AssetMetadata metadata;
+		metadata.Type = type;
+		metadata.ImportSettings = std::move(importSettings);
 		if (m_Vfs->Exists(metaPath))
 		{
 			Result<AssetMetadata> existing = ReadMetadataOf(record);
@@ -232,6 +259,12 @@ namespace Gambit
 			if (existing->Handle.IsValid())
 			{
 				record.Handle = existing->Handle;
+				if (const auto builtin = m_Builtins.find(record.Handle); builtin != m_Builtins.end())
+				{
+					return Error::Format(
+						"the handle {} in '{}' belongs to the built-in asset '{}'; use AssignNewHandle",
+						record.Handle.ToString(), metaPath, builtin->second.Name);
+				}
 				if (const AssetRecord* owner = m_Registry.Find(record.Handle); owner != nullptr)
 				{
 					return Error::Format(
@@ -242,14 +275,19 @@ namespace Gambit
 				{
 					return added.GetError();
 				}
+				RegisterListedSubAssets(record, existing->SubAssets);
 				return record.Handle;
 			}
+			// A .meta file without a handle gets one. The handles of its sub-assets are references and stay, and so
+			// do its import settings unless the caller gives some.
+			if (metadata.ImportSettings.empty())
+			{
+				metadata.ImportSettings = std::move(existing->ImportSettings);
+			}
+			metadata.SubAssets = std::move(existing->SubAssets);
 		}
 
-		AssetMetadata metadata;
 		metadata.Handle = GenerateHandle();
-		metadata.Type = type;
-		metadata.ImportSettings = std::move(importSettings);
 		record.Handle = metadata.Handle;
 		if (Result<void> written = WriteMetadataOf(record, metadata); !written)
 		{
@@ -259,7 +297,28 @@ namespace Gambit
 		{
 			return added.GetError();
 		}
+		RegisterListedSubAssets(record, metadata.SubAssets);
 		return record.Handle;
+	}
+
+	void AssetManager::RegisterListedSubAssets(const AssetRecord& file, std::span<const SubAssetEntry> entries)
+	{
+		for (const SubAssetEntry& entry : entries)
+		{
+			if (const auto builtin = m_Builtins.find(entry.Handle); builtin != m_Builtins.end())
+			{
+				GB_CORE_WARN(
+					"'{}': the sub-asset '{}' is not registered: its handle {} belongs to the built-in asset '{}'",
+					file.Path, entry.Key, entry.Handle.ToString(), builtin->second.Name);
+				continue;
+			}
+			if (Result<void> added = m_Registry.AddSubAsset({ entry.Handle, {}, entry.Type, file.Handle, entry.Key });
+			    !added)
+			{
+				GB_CORE_WARN(
+					"'{}': the sub-asset '{}' is not registered: {}", file.Path, entry.Key, added.GetError().Message);
+			}
+		}
 	}
 
 	Result<AssetHandle> AssetManager::AssignNewHandle(std::string_view path)
@@ -316,15 +375,7 @@ namespace Gambit
 		{
 			return added.GetError();
 		}
-		for (const SubAssetEntry& entry : metadata.SubAssets)
-		{
-			if (Result<void> added = m_Registry.AddSubAsset({ entry.Handle, {}, entry.Type, record.Handle, entry.Key });
-			    !added)
-			{
-				GB_CORE_WARN(
-					"'{}': the sub-asset '{}' is not registered: {}", *normalized, entry.Key, added.GetError().Message);
-			}
-		}
+		RegisterListedSubAssets(record, metadata.SubAssets);
 		return record.Handle;
 	}
 
@@ -383,7 +434,27 @@ namespace Gambit
 			return fail(metadata.GetError());
 		}
 		LoadReport report;
-		SubAssetHandles subAssets(metadata->SubAssets, [this] { return GenerateHandle(); });
+		// A listed handle that another asset has (a .meta file merged from another one, a handle the scan refused)
+		// must not reach the importer, or the model would refer to that asset. Its key gets a new handle, and the
+		// .meta file is rewritten without the old one.
+		std::vector<SubAssetEntry> known;
+		bool droppedHandles = false;
+		for (const SubAssetEntry& entry : metadata->SubAssets)
+		{
+			const AssetRecord* owner = m_Registry.Find(entry.Handle);
+			const bool builtin = m_Builtins.contains(entry.Handle);
+			if (builtin || (owner != nullptr && (owner->Parent != handle || owner->SubAssetKey != entry.Key)))
+			{
+				GB_CORE_WARN(
+					"'{}': the sub-asset '{}' lists the handle {} of {}; it gets a new handle", record.Path, entry.Key,
+					entry.Handle.ToString(),
+					builtin ? std::string("a built-in asset") : std::format("'{}'", owner->Path));
+				droppedHandles = true;
+				continue;
+			}
+			known.push_back(entry);
+		}
+		SubAssetHandles subAssets(std::move(known), [this] { return GenerateHandle(); });
 		const AssetLoadContext context{ record, *metadata, *m_Vfs, m_Types, report, subAssets };
 		Result<Ref<Asset>> loaded = importer->second->Load(context);
 		if (!loaded)
@@ -400,7 +471,7 @@ namespace Gambit
 		asset->m_Path = record.Path;
 		m_Cache[handle] = CacheEntry{ asset, {} };
 
-		if (subAssets.HasChanged())
+		if (droppedHandles || subAssets.HasChanged())
 		{
 			// New sub-assets keep their handles across re-imports only through the .meta file. Read-only content (an
 			// exported pack) has every handle listed already; failing to write elsewhere costs only that stability.

@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <span>
 #include <string>
 #include <vector>
@@ -257,15 +258,18 @@ TEST_CASE("Renderer: the default textures are built-in assets with fixed handles
 	}
 
 	const Ref<Texture2D> white = project.Assets.GetAsset<Texture2D>(GetDefaultTextureHandle(DefaultTexture::White));
+	REQUIRE(white != nullptr);
 	CHECK(white->GetWidth() == 1);
 	CHECK(white->IsSrgb());
 	CHECK(white->GetImage().GetPixel(0, 0) == glm::vec4(1.0f));
 	const Ref<Texture2D> normal =
 		project.Assets.GetAsset<Texture2D>(GetDefaultTextureHandle(DefaultTexture::FlatNormal));
+	REQUIRE(normal != nullptr);
 	CHECK_FALSE(normal->IsSrgb());
 	CHECK(Level(normal->GetImage().GetPixel(0, 0).r) == 128);
 	CHECK(Level(normal->GetImage().GetPixel(0, 0).b) == 255);
 	const Ref<Texture2D> checker = project.Assets.GetAsset<Texture2D>(GetDefaultTextureHandle(DefaultTexture::Checker));
+	REQUIRE(checker != nullptr);
 	REQUIRE(checker->GetWidth() == 64);
 	CHECK(checker->GetMipLevelCount() == 7);
 	CHECK(checker->GetImage().GetPixel(0, 0) == checker->GetImage().GetPixel(7, 7));

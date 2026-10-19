@@ -76,11 +76,6 @@ namespace Gambit
 			std::ranges::count_if(Issues, [kind](const ScanIssue& issue) { return issue.Kind == kind; }));
 	}
 
-	bool AssetRegistry::IsHandleTaken(AssetHandle handle) const
-	{
-		return m_PathOfHandle.contains(handle) || m_SubAssets.contains(handle);
-	}
-
 	Result<void> AssetRegistry::Add(AssetRecord record)
 	{
 		if (record.IsSubAsset())

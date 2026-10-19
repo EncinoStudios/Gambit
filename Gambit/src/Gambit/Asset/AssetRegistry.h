@@ -112,8 +112,6 @@ namespace Gambit
 		ScanReport Scan(VFS& vfs, std::span<const std::string> directories, const ScanOptions& options = {});
 
 	private:
-		[[nodiscard]] bool IsHandleTaken(AssetHandle handle) const;
-
 		std::map<std::string, AssetRecord, std::less<>> m_ByPath;
 		std::unordered_map<AssetHandle, std::string> m_PathOfHandle; // files; lookups only
 		std::unordered_map<AssetHandle, AssetRecord> m_SubAssets;    // lookups only, never iterated unsorted

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Reflection/ReflectionTestTypes.h"
 #include "Renderer/RendererTestSupport.h"
 
 #include "Gambit/ECS/Entity.h"
@@ -13,7 +14,10 @@
 #include "Gambit/Renderer/Systems/RenderExtractionSystem.h"
 #include "Gambit/Serialization/SceneSerializer.h"
 
+#include <algorithm>
+#include <array>
 #include <numbers>
+#include <string>
 #include <vector>
 
 using namespace Gambit;
@@ -100,6 +104,57 @@ TEST_CASE("Renderer: extraction copies cameras, lights and mesh renderers with t
 	world.Scene.Tick(Tick60, SimulationMode::Edit);
 	CHECK(glm::vec3(scene.DrawItems[0].Transform.Current[3]) == glm::vec3(6.0f, 0.0f, 0.0f));
 	CHECK(scene.Tick == 2);
+}
+
+TEST_CASE("Renderer: extraction records the simulated time, which views interpolate")
+{
+	ExtractionWorld world;
+	world.Scene.Tick(TimeStep(0.5f));
+	const RenderScene& scene = world.Extraction->GetRenderScene();
+	CHECK(scene.Time == 0.5);
+	CHECK(scene.PreviousTime == 0.5); // the first extraction has no history
+	world.Scene.Tick(TimeStep(0.5f));
+	CHECK(scene.PreviousTime == 0.5);
+	CHECK(scene.Time == 1.0);
+	CHECK(scene.GetTime(0.0f) == 0.5);
+	CHECK(scene.GetTime(0.25f) == 0.625);
+	CHECK(scene.GetTime(1.0f) == 1.0);
+	CHECK(scene.GetTime(-1.0f) == 0.5);
+	// Edit-mode ticks do not advance the simulated time: shaders hold still.
+	world.Scene.Tick(TimeStep(0.5f), SimulationMode::Edit);
+	CHECK(scene.GetTime(0.0f) == 1.0);
+	CHECK(scene.GetTime(1.0f) == 1.0);
+}
+
+TEST_CASE("Renderer: extraction history can be cut for a teleport or a scene reload")
+{
+	ExtractionWorld world;
+	Entity jumper = world.Add("Jumper", glm::vec3(0.0f));
+	jumper.AddComponent<MeshRendererComponent>().Mesh = MeshFactory::GetHandle(PrimitiveMesh::Cube);
+	Entity walker = world.Add("Walker", glm::vec3(0.0f));
+	walker.AddComponent<MeshRendererComponent>().Mesh = MeshFactory::GetHandle(PrimitiveMesh::Cube);
+	world.Scene.Tick(Tick60);
+	const RenderScene& scene = world.Extraction->GetRenderScene();
+	const auto previousOf = [&](Entity entity) {
+		const auto item = std::ranges::find(scene.DrawItems, entity.GetUUID(), &RenderDrawItem::Entity);
+		REQUIRE(item != scene.DrawItems.end());
+		return glm::vec3(item->Transform.Previous[3]);
+	};
+
+	// Snap: the teleported entity shows up at its new place, the other one still moves.
+	jumper.GetComponent<TransformComponent>().Translation = glm::vec3(100.0f, 0.0f, 0.0f);
+	walker.GetComponent<TransformComponent>().Translation = glm::vec3(1.0f, 0.0f, 0.0f);
+	world.Extraction->Snap(jumper.GetUUID());
+	world.Scene.Tick(Tick60);
+	CHECK(previousOf(jumper) == glm::vec3(100.0f, 0.0f, 0.0f));
+	CHECK(previousOf(walker) == glm::vec3(0.0f));
+
+	// ResetHistory: nothing moves at the next extraction, the time included.
+	walker.GetComponent<TransformComponent>().Translation = glm::vec3(2.0f, 0.0f, 0.0f);
+	world.Extraction->ResetHistory();
+	world.Scene.Tick(Tick60);
+	CHECK(previousOf(walker) == glm::vec3(2.0f, 0.0f, 0.0f));
+	CHECK(scene.PreviousTime == scene.Time);
 }
 
 TEST_CASE("Renderer: extracted lists are ordered by entity UUID")
@@ -202,6 +257,7 @@ TEST_CASE("Renderer: projections use reversed depth and +Y up")
 	CHECK(ExposureFromEV100(15.0f) == doctest::Approx(1.0f / (1.2f * 32768.0f)));
 
 	RenderCamera sceneCamera;
+	sceneCamera.Entity = UUID(0xCA);
 	sceneCamera.Transform.Previous = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 10.0f));
 	sceneCamera.Transform.Current = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 20.0f));
 	sceneCamera.Camera.ClearColor = glm::vec4(0.25f);
@@ -209,6 +265,7 @@ TEST_CASE("Renderer: projections use reversed depth and +Y up")
 	CHECK(NearlyEqual(view.GetPosition(), glm::vec3(0.0f, 0.0f, 15.0f)));
 	CHECK(view.ClearColor == glm::vec4(0.25f));
 	CHECK(NearlyEqual(view.Projection, MakeProjection(sceneCamera.Camera, 1.5f)));
+	CHECK(view.ViewId == 0xCA); // each camera is a view of its own
 }
 
 TEST_CASE("Renderer: lights are packed in physical units, culled by range and capped")
@@ -375,18 +432,41 @@ TEST_CASE("Renderer: engine debug shapes outline lights and camera frusta")
 TEST_CASE("Renderer: render components are reflected and round-trip through scene files")
 {
 	EngineTypes types;
-	for (const char* name : { "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight" })
+	constexpr std::array<const char*, 5> Names = { "MeshRenderer", "Camera", "DirectionalLight", "PointLight",
+		                                           "SpotLight" };
+	for (const char* name : Names)
 	{
 		CAPTURE(name);
 		CHECK(types.Registry.FindComponent(name) != nullptr);
 	}
 	const ComponentInfo* meshRenderer = types.Registry.FindComponent("MeshRenderer");
+	REQUIRE(meshRenderer != nullptr);
 	const FieldInfo* overrides = meshRenderer->FindField("MaterialOverrides");
 	REQUIRE(overrides != nullptr);
 	CHECK(overrides->Type == FieldType::Array);
 	CHECK(overrides->ElementType == FieldType::AssetHandle);
 	CHECK(overrides->Attributes.AssetType == "Material");
 
+	// Every field through SetValue / GetValue on components added by reflection.
+	World reflected(types.Registry);
+	Entity target = reflected.CreateEntity("Reflected");
+	for (const char* name : Names)
+	{
+		const ComponentInfo* info = types.Registry.FindComponent(name);
+		REQUIRE(info != nullptr);
+		void* component = info->Add(target);
+		REQUIRE(component != nullptr);
+		for (const FieldInfo& field : info->GetFields())
+		{
+			CAPTURE(name);
+			CAPTURE(field.Name);
+			const FieldValue changed = MakeDifferentValue(field, field.GetValue(component));
+			REQUIRE(field.SetValue(component, changed));
+			CHECK(field.GetValue(component) == changed);
+		}
+	}
+
+	// A value other than the default in every field, so a field registered against the wrong member shows.
 	World world(types.Registry);
 	world.SetSeed(5);
 	Entity entity = world.CreateEntityWithUUID(UUID(7), "Lamp"); // the random generator stays at the seed
@@ -394,13 +474,25 @@ TEST_CASE("Renderer: render components are reflected and round-trip through scen
 	renderer.Mesh = MeshFactory::GetHandle(PrimitiveMesh::Torus);
 	renderer.SubmeshIndex = 0;
 	renderer.MaterialOverrides = { UUID(5), UUID() };
+	renderer.CastShadows = false;
 	renderer.ReceiveShadows = false;
+	renderer.Visible = false;
 	entity.AddComponent<MeshRendererComponent>(renderer);
 	CameraComponent camera;
 	camera.Projection = ProjectionType::Orthographic;
+	camera.VerticalFOV = 35.0f;
+	camera.Near = 0.25f;
+	camera.Far = 250.0f;
 	camera.OrthoSize = 7.5f;
+	camera.Primary = false;
+	camera.ClearColor = glm::vec4(0.1f, 0.2f, 0.3f, 0.5f);
 	entity.AddComponent<CameraComponent>(camera);
-	entity.AddComponent<SpotLightComponent>().OuterConeAngle = 45.0f;
+	const DirectionalLightComponent sun{ glm::vec3(1.0f, 0.9f, 0.8f), 5000.0f, false };
+	entity.AddComponent<DirectionalLightComponent>(sun);
+	const PointLightComponent bulb{ glm::vec3(0.5f, 0.6f, 0.7f), 1200.0f, 7.5f };
+	entity.AddComponent<PointLightComponent>(bulb);
+	const SpotLightComponent spot{ glm::vec3(0.2f, 0.4f, 0.6f), 900.0f, 12.0f, 10.0f, 45.0f };
+	entity.AddComponent<SpotLightComponent>(spot);
 
 	const Result<std::string> text = SceneSerializer::Serialize(world, {});
 	REQUIRE(text.HasValue());
@@ -408,14 +500,41 @@ TEST_CASE("Renderer: render components are reflected and round-trip through scen
 	World loaded(types.Registry);
 	LoadReport report;
 	REQUIRE(SceneSerializer::Deserialize(loaded, *text, "Test.gscene", report).HasValue());
+	CHECK(report.IsEmpty());
 	Entity copy = loaded.FindEntityByName("Lamp");
 	REQUIRE(copy);
 	const MeshRendererComponent& loadedRenderer = copy.GetComponent<MeshRendererComponent>();
 	CHECK(loadedRenderer.Mesh == renderer.Mesh);
-	CHECK(loadedRenderer.SubmeshIndex == 0);
+	CHECK(loadedRenderer.SubmeshIndex == renderer.SubmeshIndex);
 	CHECK(loadedRenderer.MaterialOverrides == renderer.MaterialOverrides);
-	CHECK_FALSE(loadedRenderer.ReceiveShadows);
-	CHECK(copy.GetComponent<CameraComponent>().OrthoSize == 7.5f);
-	CHECK(copy.GetComponent<SpotLightComponent>().OuterConeAngle == 45.0f);
+	CHECK(loadedRenderer.CastShadows == renderer.CastShadows);
+	CHECK(loadedRenderer.ReceiveShadows == renderer.ReceiveShadows);
+	CHECK(loadedRenderer.Visible == renderer.Visible);
+	const CameraComponent& loadedCamera = copy.GetComponent<CameraComponent>();
+	CHECK(loadedCamera.Projection == camera.Projection);
+	CHECK(loadedCamera.VerticalFOV == camera.VerticalFOV);
+	CHECK(loadedCamera.Near == camera.Near);
+	CHECK(loadedCamera.Far == camera.Far);
+	CHECK(loadedCamera.OrthoSize == camera.OrthoSize);
+	CHECK(loadedCamera.Primary == camera.Primary);
+	CHECK(loadedCamera.ClearColor == camera.ClearColor);
+	const DirectionalLightComponent& loadedSun = copy.GetComponent<DirectionalLightComponent>();
+	CHECK(loadedSun.Color == sun.Color);
+	CHECK(loadedSun.Illuminance == sun.Illuminance);
+	CHECK(loadedSun.CastShadows == sun.CastShadows);
+	const PointLightComponent& loadedBulb = copy.GetComponent<PointLightComponent>();
+	CHECK(loadedBulb.Color == bulb.Color);
+	CHECK(loadedBulb.Intensity == bulb.Intensity);
+	CHECK(loadedBulb.Range == bulb.Range);
+	const SpotLightComponent& loadedSpot = copy.GetComponent<SpotLightComponent>();
+	CHECK(loadedSpot.Color == spot.Color);
+	CHECK(loadedSpot.Intensity == spot.Intensity);
+	CHECK(loadedSpot.Range == spot.Range);
+	CHECK(loadedSpot.InnerConeAngle == spot.InnerConeAngle);
+	CHECK(loadedSpot.OuterConeAngle == spot.OuterConeAngle);
 	CHECK(loaded.ComputeStateHash() == world.ComputeStateHash());
+	// Saving the loaded world gives the same bytes.
+	const Result<std::string> resaved = SceneSerializer::Serialize(loaded, {});
+	REQUIRE(resaved.HasValue());
+	CHECK(*resaved == *text);
 }

@@ -4,6 +4,7 @@
 #include "Gambit/Renderer/DebugDraw.h"
 #include "Gambit/Renderer/RenderScene.h"
 
+#include <optional>
 #include <unordered_map>
 
 namespace Gambit
@@ -33,6 +34,13 @@ namespace Gambit
 		// Where systems and scripts of this world draw debug lines (DebugDrawList documents their lifetime).
 		[[nodiscard]] DebugDrawList& GetDebugDraw() noexcept { return m_DebugDraw; }
 
+		// Forgets the previous transforms and time: the next extraction starts without motion, as if every entity
+		// were seen for the first time (after loading a scene, or when the world jumped back in time).
+		void ResetHistory();
+		// Forgets the previous transform of one entity: the next extraction shows it where it is, without moving it
+		// there over a tick (after a teleport or a respawn).
+		void Snap(UUID entity) { m_PreviousTransforms.erase(entity); }
+
 		// The extraction system of `world`, null when it has none.
 		[[nodiscard]] static RenderExtractionSystem* Find(World& world);
 
@@ -42,5 +50,6 @@ namespace Gambit
 		DebugDrawList m_DebugDraw;
 		// The world matrix each extracted entity had at the latest extraction (lookups only, never iterated).
 		std::unordered_map<UUID, glm::mat4> m_PreviousTransforms;
+		std::optional<double> m_PreviousTime; // the world's time at the latest extraction
 	};
 }

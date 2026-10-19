@@ -5,6 +5,7 @@
 
 #include "Gambit/Renderer/Material.h"
 
+#include <limits>
 #include <string>
 
 using namespace Gambit;

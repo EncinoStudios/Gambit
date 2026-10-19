@@ -9,14 +9,21 @@
 #include "Gambit/ECS/Systems/TransformSystem.h"
 #include "Gambit/ECS/World.h"
 #include "Gambit/RHI/GraphicsDevice.h"
+#include "Gambit/RHI/Image.h"
 #include "Gambit/Renderer/Material.h"
 #include "Gambit/Renderer/MeshFactory.h"
+#include "Gambit/Renderer/Passes/TonemapPass.h"
 #include "Gambit/Renderer/RenderResources.h"
 #include "Gambit/Renderer/SceneRenderer.h"
 #include "Gambit/Renderer/Systems/RenderExtractionSystem.h"
 #include "Gambit/Renderer/Texture.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
+#include <filesystem>
+#include <format>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -100,6 +107,51 @@ namespace
 			REQUIRE_MESSAGE(stats.HasValue(), problem);
 			return *stats;
 		}
+	};
+
+	// The shared device with a smaller texture size limit: forwards everything else.
+	class LimitedGraphicsDevice final : public GraphicsDevice
+	{
+	public:
+		LimitedGraphicsDevice(GraphicsDevice& device, uint32_t maxTextureDimension)
+			: m_Device(device), m_Info(device.GetInfo())
+		{
+			m_Info.Limits.MaxTextureDimension2D = maxTextureDimension;
+		}
+
+		[[nodiscard]] bool BeginFrame() override { return m_Device.BeginFrame(); }
+		bool Present() override { return m_Device.Present(); }
+		[[nodiscard]] nvrhi::ITexture* GetCurrentBackBuffer() const override { return m_Device.GetCurrentBackBuffer(); }
+		[[nodiscard]] nvrhi::IFramebuffer* GetCurrentFramebuffer() const override
+		{
+			return m_Device.GetCurrentFramebuffer();
+		}
+		[[nodiscard]] uint32_t GetCurrentBackBufferIndex() const override
+		{
+			return m_Device.GetCurrentBackBufferIndex();
+		}
+		[[nodiscard]] uint32_t GetBackBufferCount() const override { return m_Device.GetBackBufferCount(); }
+		[[nodiscard]] glm::uvec2 GetBackBufferSize() const override { return m_Device.GetBackBufferSize(); }
+		[[nodiscard]] nvrhi::Format GetBackBufferFormat() const override { return m_Device.GetBackBufferFormat(); }
+		[[nodiscard]] uint64_t GetFrameCount() const override { return m_Device.GetFrameCount(); }
+		[[nodiscard]] bool IsInFrame() const override { return m_Device.IsInFrame(); }
+		[[nodiscard]] Result<void> ResizeBackBuffers(uint32_t width, uint32_t height) override
+		{
+			return m_Device.ResizeBackBuffers(width, height);
+		}
+		[[nodiscard]] bool IsVSync() const override { return m_Device.IsVSync(); }
+		void SetVSync(bool enabled) override { m_Device.SetVSync(enabled); }
+		void WaitIdle() override { m_Device.WaitIdle(); }
+		[[nodiscard]] nvrhi::IDevice* GetNvrhiDevice() const override { return m_Device.GetNvrhiDevice(); }
+		[[nodiscard]] const GraphicsDeviceInfo& GetInfo() const override { return m_Info; }
+		[[nodiscard]] bool IsHeadless() const override { return m_Device.IsHeadless(); }
+		[[nodiscard]] bool IsDeviceLost() const override { return m_Device.IsDeviceLost(); }
+		[[nodiscard]] uint64_t GetValidationErrorCount() const override { return m_Device.GetValidationErrorCount(); }
+		[[nodiscard]] ShaderCache& GetShaderCache() override { return m_Device.GetShaderCache(); }
+
+	private:
+		GraphicsDevice& m_Device;
+		GraphicsDeviceInfo m_Info;
 	};
 
 	RenderDrawItem MakeDraw(AssetHandle mesh, const glm::mat4& transform, std::vector<AssetHandle> overrides = {})
@@ -292,6 +344,154 @@ TEST_CASE("Renderer: GPU copies of assets are cached and replaced when the asset
 	CHECK(resources.GetMaterial(Material::DefaultHandle).Alpha == AlphaMode::Blend);
 }
 
+TEST_CASE("Renderer: GPU copies are rebuilt when an asset is reloaded" * doctest::test_suite("gpu"))
+{
+	GB_GPU_TEST(device);
+	RendererProject project;
+	const auto writePng = [&](uint32_t size) {
+		Image image(size, size, ImageFormat::RGBA8);
+		image.SetPixel(0, 0, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+		std::filesystem::create_directories(project.Directory.Resolve("Assets"));
+		REQUIRE(SavePng(image, project.Directory.Resolve("Assets/Paint.png")).HasValue());
+	};
+	writePng(4);
+	project.CopyTexturedCube();
+	project.Assets.Scan();
+	const AssetHandle paint = project.Assets.GetHandle("Assets/Paint.png");
+	MaterialData painted;
+	painted.BaseColorTexture = paint;
+	const AssetHandle material(0x7100);
+	project.Assets.RegisterBuiltinAsset(
+		material, AssetType::Material, "Test/Painted", [painted] { return Ref<Asset>(CreateRef<Material>(painted)); });
+	const AssetHandle model = project.Assets.GetHandle("Assets/Models/TexturedCube.gltf");
+	RenderResources resources(device, project.Assets);
+
+	resources.BeginFrame();
+	CHECK(resources.GetTexture(paint, DefaultTexture::White).Width == 4);
+	const nvrhi::BindingSetHandle oldBindings = resources.GetMaterial(material).BindingSet;
+	const Ref<Model> cube = resources.GetModel(model);
+	REQUIRE(cube != nullptr);
+	const AssetHandle meshHandle = cube->GetSubAssetHandles(AssetType::Mesh).at(0);
+	const GpuMesh* mesh = resources.GetMesh(meshHandle);
+	REQUIRE(mesh != nullptr);
+	const nvrhi::BufferHandle oldPositions = mesh->Positions; // kept alive: its address cannot be reused
+
+	// A changed file and a reload: the next frame uploads the new texture, and the material binds it.
+	writePng(8);
+	REQUIRE(project.Assets.ReloadAsset(paint).HasValue());
+	REQUIRE(project.Assets.ReloadAsset(model).HasValue());
+	CHECK(resources.GetTexture(paint, DefaultTexture::White).Width == 4); // checked this frame already
+	resources.BeginFrame();
+	CHECK(resources.GetTexture(paint, DefaultTexture::White).Width == 8);
+	CHECK(resources.GetMaterial(material).BindingSet != oldBindings);
+	const GpuMesh* reloaded = resources.GetMesh(meshHandle);
+	REQUIRE(reloaded != nullptr);
+	CHECK(reloaded->Positions != oldPositions);
+	CHECK(resources.GetModel(model) != cube);
+}
+
+TEST_CASE("Renderer: GPU copies that cannot be created are reported once and not retried" * doctest::test_suite("gpu"))
+{
+	GB_GPU_TEST(device);
+	// The device supports 4 texels per side here: an 8 x 8 texture loads as an asset, its GPU copy cannot be created.
+	LimitedGraphicsDevice limited(device, 4);
+	RendererProject project;
+	RenderResources resources(limited, project.Assets);
+	const AssetHandle large(0x7200);
+	project.Assets.RegisterBuiltinAsset(large, AssetType::Texture, "Test/Large", [] {
+		return Ref<Asset>(CreateRef<Texture2D>(Image(8, 8, ImageFormat::RGBA8), TextureImportSettings{}));
+	});
+	const auto countErrors = [](const ScopedLogCapture& log) {
+		const std::vector<LogEntry> entries = log.GetEntries();
+		return std::ranges::count_if(entries, [](const LogEntry& entry) {
+			return entry.Level == LogLevel::Error && entry.Message.find("0x0000000000007200") != std::string::npos;
+		});
+	};
+
+	const ScopedLogCapture log;
+	const GpuTexture& white = resources.GetTexture(AssetHandle(), DefaultTexture::White);
+	for (int frame = 0; frame < 3; ++frame)
+	{
+		resources.BeginFrame();
+		CHECK(&resources.GetTexture(large, DefaultTexture::White) == &white);
+	}
+	CHECK(countErrors(log) == 1);
+	CHECK(log.Contains(LogLevel::Error, "at most 4 texels per side"));
+
+	// A reload hands out another object: it is tried (and reported) again.
+	REQUIRE(project.Assets.ReloadAsset(large).HasValue());
+	resources.BeginFrame();
+	CHECK(&resources.GetTexture(large, DefaultTexture::White) == &white);
+	CHECK(countErrors(log) == 2);
+
+	// A model that fails to load is reported once; after it loaded, a new failure is reported again.
+	project.Directory.WriteFile("Assets/Flaky.gltf", "{");
+	project.Assets.Scan();
+	const AssetHandle flaky = project.Assets.GetHandle("Assets/Flaky.gltf");
+	REQUIRE(flaky.IsValid());
+	const std::string modelError = std::format("Renderer: asset {}", flaky.ToString());
+	const auto countModelErrors = [&] {
+		const std::vector<LogEntry> entries = log.GetEntries();
+		return std::ranges::count_if(entries, [&](const LogEntry& entry) {
+			return entry.Level == LogLevel::Error && entry.Message.find(modelError) != std::string::npos;
+		});
+	};
+	for (int frame = 0; frame < 2; ++frame)
+	{
+		resources.BeginFrame();
+		CHECK(resources.GetModel(flaky) == nullptr);
+	}
+	CHECK(countModelErrors() == 1);
+	project.Directory.WriteFile("Assets/Flaky.gltf", R"({ "asset": { "version": "2.0" } })");
+	REQUIRE(project.Assets.ReloadAsset(flaky).HasValue());
+	resources.BeginFrame();
+	CHECK(resources.GetModel(flaky) != nullptr);
+	project.Directory.WriteFile("Assets/Flaky.gltf", "{");
+	CHECK_FALSE(project.Assets.ReloadAsset(flaky).HasValue());
+	resources.BeginFrame();
+	CHECK(resources.GetModel(flaky) == nullptr);
+	CHECK(countModelErrors() == 2);
+}
+
+TEST_CASE("Renderer: GPU copies hold their assets while used and are released when unused" * doctest::test_suite("gpu"))
+{
+	GB_GPU_TEST(device);
+	RendererProject project;
+	project.CopyTexturedCube();
+	project.Assets.Scan();
+	const AssetHandle model = project.Assets.GetHandle("Assets/Models/TexturedCube.gltf");
+	RenderResources resources(device, project.Assets);
+
+	resources.BeginFrame();
+	AssetHandle meshHandle;
+	{
+		const Ref<Model> cube = resources.GetModel(model);
+		REQUIRE(cube != nullptr);
+		meshHandle = cube->GetSubAssetHandles(AssetType::Mesh).at(0);
+	}
+	REQUIRE(resources.GetMesh(meshHandle) != nullptr);
+	const AssetHandle sphere = MeshFactory::GetHandle(PrimitiveMesh::Sphere);
+	REQUIRE(resources.GetMesh(sphere) != nullptr);
+
+	// What the renderer draws is in use: unloading unused assets keeps it (no re-import at the next frame).
+	project.Assets.UnloadUnused();
+	CHECK(project.Assets.IsLoaded(model));
+	CHECK(project.Assets.IsLoaded(meshHandle));
+	CHECK(project.Assets.IsLoaded(sphere));
+
+	// The sphere stays in use, the model is no longer asked for: after RenderResources::IdleFramesBeforeRelease
+	// frames its GPU copies go, and with them the renderer's hold on the asset.
+	for (uint64_t frame = 0; frame <= RenderResources::IdleFramesBeforeRelease; ++frame)
+	{
+		resources.BeginFrame();
+		REQUIRE(resources.GetMesh(sphere) != nullptr);
+	}
+	project.Assets.UnloadUnused();
+	CHECK(project.Assets.IsLoaded(sphere));
+	CHECK_FALSE(project.Assets.IsLoaded(model));
+	CHECK_FALSE(project.Assets.IsLoaded(meshHandle));
+}
+
 TEST_CASE("Renderer: a lit plane has the luminance the BRDF gives" * doctest::test_suite("gpu"))
 {
 	GB_GPU_TEST(device);
@@ -308,7 +508,7 @@ TEST_CASE("Renderer: a lit plane has the luminance the BRDF gives" * doctest::te
 	const float brdf = 1.0f / Pi + 0.04f / (4.0f * Pi * alpha * alpha);
 
 	const auto centerLuminance = [&]() {
-		const ViewTargets* targets = fixture.Renderer.FindViewTargets(glm::uvec2(32, 32));
+		const ViewTargets* targets = fixture.Renderer.FindViewTargets(view.ViewId);
 		REQUIRE(targets != nullptr);
 		return ReadBack(device, targets->SceneColor).GetPixel(16, 16);
 	};
@@ -340,6 +540,54 @@ TEST_CASE("Renderer: a lit plane has the luminance the BRDF gives" * doctest::te
 		const float expected = brdf * (3.0f / (1.5f * 1.5f)) * exposure;
 		CHECK(centerLuminance().r == doctest::Approx(expected).epsilon(0.01));
 	}
+	SUBCASE("spot light: the cone's ramp")
+	{
+		// 3 candela straight down from 1.5 above, with a narrow cone so that the view also sees where it ends.
+		RenderSpotLight spot;
+		spot.Light.Intensity = 4.0f * Pi * 3.0f;
+		spot.Light.Range = 0.0f;
+		spot.Light.InnerConeAngle = 2.0f;
+		spot.Light.OuterConeAngle = 4.0f;
+		spot.Transform.Previous = spot.Transform.Current =
+			Facing(glm::vec3(0.0f, 1.5f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f));
+		scene.SpotLights.push_back(spot);
+		const SceneRenderStats stats = fixture.Render(scene, view);
+		CHECK(stats.Lights == 1);
+		const ViewTargets* targets = fixture.Renderer.FindViewTargets(view.ViewId);
+		REQUIRE(targets != nullptr);
+		const Image luminance = ReadBack(device, targets->SceneColor);
+		const float center = luminance.GetPixel(16, 16).r;
+		CHECK(center == doctest::Approx(brdf * (3.0f / (1.5f * 1.5f)) * exposure).epsilon(0.01));
+		// About 3 degrees off the axis (between the inner and the outer cone): dimmer; 9 degrees: dark.
+		const float ramp = luminance.GetPixel(23, 16).r;
+		CHECK(ramp > 0.05f * center);
+		CHECK(ramp < 0.95f * center);
+		CHECK(luminance.GetPixel(0, 0).r == 0.0f);
+	}
+	SUBCASE("metallic-roughness texture: roughness in G, metallic in B")
+	{
+		scene.DirectionalLights.push_back(MakeSun(glm::vec3(0.0f, -1.0f, 0.0f), 0.8f));
+		Image packed(1, 1, ImageFormat::RGBA8);
+		packed.SetPixel(0, 0, glm::vec4(0.0f, 128.0f / 255.0f, 1.0f, 1.0f));
+		TextureImportSettings linear;
+		linear.Srgb = false;
+		linear.GenerateMips = false;
+		MaterialData metal;
+		metal.BaseColor = glm::vec4(0.9f, 0.6f, 0.3f, 1.0f);
+		metal.Metallic = 1.0f;
+		metal.Roughness = 1.0f;
+		metal.MetallicRoughnessTexture = fixture.AddTexture(packed, linear);
+		scene.DrawItems[0].MaterialOverrides = { fixture.AddMaterial(metal) };
+		fixture.Render(scene, view);
+		// A metal reflects no diffuse light and its base color as F0 (Schlick at normal incidence: F = F0); with
+		// N = V = L the specular lobe is D * Vis = 1 / (4 pi alpha^2) for alpha = roughness^2.
+		const float roughness = 128.0f / 255.0f;
+		const float metalAlpha = roughness * roughness;
+		const float specular = 1.0f / (4.0f * Pi * metalAlpha * metalAlpha);
+		const glm::vec4 luminance = centerLuminance();
+		CHECK(luminance.r == doctest::Approx(0.9f * specular * 0.8f * exposure).epsilon(0.01));
+		CHECK(luminance.b == doctest::Approx(0.3f * specular * 0.8f * exposure).epsilon(0.01));
+	}
 	SUBCASE("uniform ambient light")
 	{
 		scene.Environment.AmbientLuminance = 0.5f;
@@ -360,6 +608,52 @@ TEST_CASE("Renderer: a lit plane has the luminance the BRDF gives" * doctest::te
 		const glm::vec4 luminance = centerLuminance();
 		CHECK(luminance.r == doctest::Approx(0.5f * exposure).epsilon(0.01));
 		CHECK(luminance.b == doctest::Approx(2.0f * exposure).epsilon(0.01));
+	}
+}
+
+TEST_CASE("Renderer: normal maps shade the same at any scale of the draw" * doctest::test_suite("gpu"))
+{
+	GB_GPU_TEST(device);
+	RenderFixture fixture(device, 32, 32);
+	// A normal map that tilts every normal towards the plane's tangent (+X, along +U) to (0.6, 0, 0.8), lit along the
+	// tilted normal: N.L is 1 instead of the 0.8 of the flat plane, so the plane is 1.25 times brighter.
+	Image tilted(1, 1, ImageFormat::RGBA8);
+	tilted.SetPixel(0, 0, glm::vec4(0.8f, 0.5f, 0.9f, 1.0f));
+	TextureImportSettings linear;
+	linear.Srgb = false;
+	linear.GenerateMips = false;
+	MaterialData bumpy;
+	bumpy.NormalTexture = fixture.AddTexture(tilted, linear);
+	const AssetHandle bumpyMaterial = fixture.AddMaterial(bumpy);
+	const AssetHandle flatMaterial = fixture.AddMaterial(MaterialData{});
+	RenderScene scene;
+	scene.DirectionalLights.push_back(MakeSun(-glm::vec3(0.6f, 0.8f, 0.0f), 1.0f));
+
+	// The luminance at the center of the plane, scaled by `scale` and seen from straight above.
+	const auto luminanceAt = [&](const glm::vec3& scale, AssetHandle material) {
+		scene.DrawItems = { MakeDraw(
+			MeshFactory::GetHandle(PrimitiveMesh::Plane), glm::scale(glm::mat4(1.0f), scale), { material }) };
+		const float extent = std::min(scale.x, scale.z);
+		CameraComponent camera;
+		camera.VerticalFOV = 10.0f;
+		camera.Near = 0.05f * extent;
+		camera.Far = 10.0f * extent;
+		const RenderView view = MakeView(glm::vec3(0.0f, 2.0f * extent, 0.0f), glm::vec3(0.0f), camera, 1.0f);
+		fixture.Render(scene, view);
+		const ViewTargets* targets = fixture.Renderer.FindViewTargets(view.ViewId);
+		REQUIRE(targets != nullptr);
+		return ReadBack(device, targets->SceneColor).GetPixel(16, 16).r;
+	};
+
+	const float flat = luminanceAt(glm::vec3(1.0f), flatMaterial);
+	const float reference = luminanceAt(glm::vec3(1.0f), bumpyMaterial);
+	CHECK(reference == doctest::Approx(1.25f * flat).epsilon(0.02));
+	// Units authored in centimetres (0.01), large props, and non-uniform scale.
+	for (const glm::vec3& scale : { glm::vec3(0.01f), glm::vec3(10.0f), glm::vec3(3.0f, 1.0f, 0.5f) })
+	{
+		CAPTURE(scale.x);
+		CAPTURE(scale.z);
+		CHECK(luminanceAt(scale, bumpyMaterial) == doctest::Approx(reference).epsilon(0.01));
 	}
 }
 
@@ -512,7 +806,8 @@ TEST_CASE("Renderer: debug lines and engine shapes match their golden image" * d
 	RenderView view = MakeView(glm::vec3(0.5f, 1.5f, 4.0f), glm::vec3(0.0f), camera, fixture.GetAspectRatio());
 	view.Shapes = DebugShapes::Bounds | DebugShapes::Lights;
 	const SceneRenderStats stats = fixture.Render(scene, view);
-	// Three lines of the scene, the cube's bounds and the light shapes (a sun and a point light with a range).
+	// The scene's two lines and its sphere, the cube's bounds and the light shapes (a sun and a point light with a
+	// range).
 	CHECK(stats.DebugLines == 2 + 3 * 32 + 12 + (32 + 1) + 2 * 3 * 32);
 	CheckGoldenTexture(device, fixture.Target, "RendererDebugLines");
 
@@ -522,25 +817,54 @@ TEST_CASE("Renderer: debug lines and engine shapes match their golden image" * d
 	CHECK(fixture.Render(scene, view).DebugLines == 0);
 }
 
+TEST_CASE("Renderer: the tonemap pass sRGB-encodes for UNORM targets only")
+{
+	CHECK(TonemapPass::NeedsSrgbEncoding(nvrhi::Format::RGBA8_UNORM));
+	CHECK(TonemapPass::NeedsSrgbEncoding(nvrhi::Format::BGRA8_UNORM));
+	CHECK_FALSE(TonemapPass::NeedsSrgbEncoding(nvrhi::Format::SRGBA8_UNORM));
+	CHECK_FALSE(TonemapPass::NeedsSrgbEncoding(nvrhi::Format::SBGRA8_UNORM));
+	CHECK_FALSE(TonemapPass::NeedsSrgbEncoding(nvrhi::Format::RGBA16_FLOAT));
+	CHECK_FALSE(TonemapPass::NeedsSrgbEncoding(nvrhi::Format::RGBA32_FLOAT));
+}
+
 TEST_CASE("Renderer: views of several sizes and formats render in one frame" * doctest::test_suite("gpu"))
 {
 	GB_GPU_TEST(device);
 	RenderFixture fixture(device, 64, 48);
 	const RenderScene scene = MakeSphereGrid(fixture);
+	const auto makeFramebuffer = [&](const nvrhi::TextureHandle& texture) {
+		const nvrhi::FramebufferHandle framebuffer =
+			device.GetNvrhiDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(texture));
+		REQUIRE(framebuffer != nullptr);
+		return framebuffer;
+	};
 
-	// A second target of another size and a UNORM format (the shader encodes sRGB itself) and a float one.
+	// Views of another size: a UNORM target (the shader encodes sRGB itself), an sRGB one and a float one (linear).
 	const nvrhi::TextureHandle unorm = CreateTarget(device, 32, 24, nvrhi::Format::RGBA8_UNORM);
-	const nvrhi::FramebufferHandle unormFramebuffer =
-		device.GetNvrhiDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(unorm));
 	const nvrhi::TextureHandle srgb = CreateTarget(device, 32, 24, nvrhi::Format::SRGBA8_UNORM);
-	const nvrhi::FramebufferHandle srgbFramebuffer =
-		device.GetNvrhiDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(srgb));
-	const RenderView view = MakeSphereGridView(4.0f / 3.0f);
-	REQUIRE(fixture.Renderer.Render(scene, view, 1.0f, fixture.Framebuffer).HasValue());
-	REQUIRE(fixture.Renderer.Render(scene, view, 1.0f, unormFramebuffer).HasValue());
-	REQUIRE(fixture.Renderer.Render(scene, view, 1.0f, srgbFramebuffer).HasValue());
-	CHECK(fixture.Renderer.FindViewTargets(glm::uvec2(64, 48)) != nullptr);
-	CHECK(fixture.Renderer.FindViewTargets(glm::uvec2(32, 24)) != nullptr);
+	const nvrhi::TextureHandle linear = CreateTarget(device, 32, 24, nvrhi::Format::RGBA16_FLOAT);
+	const nvrhi::FramebufferHandle unormFramebuffer = makeFramebuffer(unorm);
+	const nvrhi::FramebufferHandle srgbFramebuffer = makeFramebuffer(srgb);
+	const nvrhi::FramebufferHandle linearFramebuffer = makeFramebuffer(linear);
+	const auto viewWithId = [](uint64_t id) {
+		RenderView view = MakeSphereGridView(4.0f / 3.0f);
+		view.ViewId = id;
+		return view;
+	};
+	REQUIRE(fixture.Renderer.Render(scene, viewWithId(1), 1.0f, fixture.Framebuffer).HasValue());
+	REQUIRE(fixture.Renderer.Render(scene, viewWithId(2), 1.0f, unormFramebuffer).HasValue());
+	REQUIRE(fixture.Renderer.Render(scene, viewWithId(3), 1.0f, srgbFramebuffer).HasValue());
+	REQUIRE(fixture.Renderer.Render(scene, viewWithId(4), 1.0f, linearFramebuffer).HasValue());
+	const ViewTargets* large = fixture.Renderer.FindViewTargets(1);
+	const ViewTargets* unormTargets = fixture.Renderer.FindViewTargets(2);
+	const ViewTargets* srgbTargets = fixture.Renderer.FindViewTargets(3);
+	const ViewTargets* linearTargets = fixture.Renderer.FindViewTargets(4);
+	REQUIRE((large != nullptr && unormTargets != nullptr && srgbTargets != nullptr && linearTargets != nullptr));
+	CHECK(large->Size == glm::uvec2(64, 48));
+	CHECK(unormTargets->Size == glm::uvec2(32, 24));
+	// Views of the same size keep targets of their own: each view's depth and color stay readable after the frame.
+	CHECK(unormTargets->SceneColor != srgbTargets->SceneColor);
+	CHECK(srgbTargets->Depth != linearTargets->Depth);
 
 	// UNORM and sRGB targets hold the same bytes: one is encoded by the shader, the other by the hardware.
 	const Image unormImage = ReadBack(device, unorm);
@@ -548,18 +872,31 @@ TEST_CASE("Renderer: views of several sizes and formats render in one frame" * d
 	const Result<ImageCompareResult> same = ImageCompare(unormImage, srgbImage, 1.0f / 255.0f, 0.0);
 	REQUIRE(same.HasValue());
 	CHECK(same->Passed);
-	CHECK(unormImage.GetPixel(16, 12) != glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)); // something was drawn
+	CHECK(unormImage.GetPixel(16, 12) != unormImage.GetPixel(0, 0)); // a sphere, not the background
+	// The float target holds the tonemapped value itself, not encoded.
+	const float sceneColor = ReadBack(device, linearTargets->SceneColor).GetPixel(16, 12).r;
+	CHECK(ReadBack(device, linear).GetPixel(16, 12).r == doctest::Approx(TonemapAces(sceneColor)).epsilon(0.005));
+	CHECK(srgbImage.GetPixel(16, 12).r == doctest::Approx(LinearToSrgb(TonemapAces(sceneColor))).epsilon(0.01));
 
-	// Targets of a size no view uses any more are released.
+	// A view rendered at another size replaces its targets.
+	REQUIRE(fixture.Renderer.Render(scene, viewWithId(1), 1.0f, unormFramebuffer).HasValue());
+	const ViewTargets* resized = fixture.Renderer.FindViewTargets(1);
+	REQUIRE(resized != nullptr);
+	CHECK(resized->Size == glm::uvec2(32, 24));
+
+	// The targets of views that stopped rendering are released.
 	for (uint64_t index = 0; index <= SceneRenderer::TargetIdleRenders; ++index)
 	{
-		REQUIRE(fixture.Renderer.Render(scene, view, 1.0f, unormFramebuffer).HasValue());
+		REQUIRE(fixture.Renderer.Render(scene, viewWithId(2), 1.0f, unormFramebuffer).HasValue());
 	}
-	CHECK(fixture.Renderer.FindViewTargets(glm::uvec2(64, 48)) == nullptr);
+	CHECK(fixture.Renderer.FindViewTargets(1) == nullptr);
+	CHECK(fixture.Renderer.FindViewTargets(3) == nullptr);
+	CHECK(fixture.Renderer.FindViewTargets(2) != nullptr);
 	fixture.Renderer.ReleaseViewTargets();
-	CHECK(fixture.Renderer.FindViewTargets(glm::uvec2(32, 24)) == nullptr);
+	CHECK(fixture.Renderer.FindViewTargets(2) == nullptr);
 
 	// Targets the renderer cannot use.
+	const RenderView view = viewWithId(2);
 	CHECK_FALSE(fixture.Renderer.Render(scene, view, 1.0f, nullptr).HasValue());
 	const nvrhi::TextureHandle depth =
 		device.GetNvrhiDevice()->createTexture(nvrhi::TextureDesc()
@@ -626,6 +963,44 @@ TEST_CASE("Renderer: draw items outside the view are culled" * doctest::test_sui
 	CHECK(log.Contains(LogLevel::Warn, "asks for submesh 3"));
 }
 
+TEST_CASE(
+	"Renderer: a model draws its meshes with their materials, ignoring mesh-only options" * doctest::test_suite("gpu"))
+{
+	GB_GPU_TEST(device);
+	RenderFixture fixture(device, 64, 64);
+	fixture.Project.CopyTexturedCube();
+	fixture.Project.Assets.Scan();
+	const AssetHandle model = fixture.Project.Assets.GetHandle("Assets/Models/TexturedCube.gltf");
+	RenderScene scene;
+	scene.DrawItems.push_back(MakeDraw(model, glm::mat4(1.0f)));
+	scene.DirectionalLights.push_back(MakeSun(glm::vec3(-0.3f, -1.0f, -0.5f), 2.0f));
+	CameraComponent camera;
+	camera.VerticalFOV = 40.0f;
+	const RenderView view = MakeView(glm::vec3(1.5f, 2.0f, 2.5f), glm::vec3(0.0f, 0.5f, 0.0f), camera, 1.0f);
+	fixture.Render(scene, view);
+	const Image plain = ReadBack(device, fixture.Target);
+
+	// A submesh index and material slots mean nothing across the meshes of a model: warned once, then ignored.
+	MaterialData glowing;
+	glowing.EmissiveColor = glm::vec3(5.0f);
+	scene.DrawItems[0].MaterialOverrides = { fixture.AddMaterial(glowing) };
+	scene.DrawItems[0].SubmeshIndex = 3;
+	const ScopedLogCapture log;
+	CHECK(fixture.Render(scene, view).DrawCalls == 1);
+	fixture.Render(scene, view);
+	const Result<ImageCompareResult> same = ImageCompare(ReadBack(device, fixture.Target), plain, 0.0f, 0.0);
+	REQUIRE(same.HasValue());
+	CHECK(same->Passed);
+	const std::vector<LogEntry> entries = log.GetEntries();
+	CHECK(
+		std::ranges::count_if(
+			entries,
+			[](const LogEntry& entry) {
+				return entry.Level == LogLevel::Warn && entry.Message.find("apply to meshes only") != std::string::npos;
+			})
+		== 1);
+}
+
 // A GPU test (GB_GPU_TEST skips it without a device) in the "slow" suite: a test case has one suite.
 TEST_CASE("Renderer: the sphere grid renders at 1280x720 (frame time)" * doctest::test_suite("slow"))
 {
@@ -646,6 +1021,6 @@ TEST_CASE("Renderer: the sphere grid renders at 1280x720 (frame time)" * doctest
 	const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - start;
 	MESSAGE(std::format(
 		"sphere grid at 1280x720 on '{}': {:.1f} ms per frame", device.GetInfo().Name, elapsed.count() / Frames));
-	const glm::vec4 center = ReadBack(device, fixture.Target).GetPixel(640, 360);
-	CHECK(center.r > 0.1f); // the middle sphere is lit
+	const Image image = ReadBack(device, fixture.Target);
+	CHECK(image.GetPixel(640, 360).r > image.GetPixel(0, 0).r + 0.1f); // the middle sphere is lit
 }

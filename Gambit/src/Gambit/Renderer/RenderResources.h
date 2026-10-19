@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <memory>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
@@ -63,15 +62,21 @@ namespace Gambit
 		bool DoubleSided = false;
 	};
 
-	// The GPU copies of the assets the renderer draws with (meshes, textures, materials), created when first used and
-	// rebuilt when the AssetManager hands out another object for a handle (a reload) or a material's version changes.
+	// The GPU copies of the assets the renderer draws with (meshes, textures, materials) and the models it draws,
+	// created when first used and rebuilt when the AssetManager hands out another object for a handle (a reload) or a
+	// material's version changes. Each copy holds its asset, so AssetManager::UnloadUnused keeps what is drawn; copies
+	// that no Get call asked for during IdleFramesBeforeRelease frames are released (with the assets they hold).
 	// Uploads, including the generation of mip chains on the GPU (render passes that box-filter each level from the
-	// one above, correct for sRGB and non-power-of-two sizes), are submitted right away. Assets that fail to load are
-	// reported once and replaced: textures by a default texture, materials by the default material, meshes by
-	// nothing. Not thread safe; every object it creates must be released before the device.
+	// one above, correct for sRGB and non-power-of-two sizes), are submitted right away. Assets that fail to load or
+	// to upload are reported once and replaced: textures by a default texture, materials by the default material,
+	// meshes by nothing; a failed upload is tried again only for another object or version of the asset. Not thread
+	// safe; every object it creates must be released before the device.
 	class RenderResources
 	{
 	public:
+		// Frames (BeginFrame calls) after which a copy nobody asked for is released.
+		static constexpr uint64_t IdleFramesBeforeRelease = 120;
+
 		RenderResources(GraphicsDevice& device, AssetManager& assets);
 		~RenderResources();
 		RenderResources(const RenderResources&) = delete;
@@ -82,8 +87,9 @@ namespace Gambit
 		// The layout of descriptor set 1 (Gpu::MaterialSet) that every material binding set uses.
 		[[nodiscard]] nvrhi::IBindingLayout* GetMaterialBindingLayout() const noexcept { return m_MaterialLayout; }
 
-		// Starts a frame: cached objects are checked against their assets again (once per frame).
-		void BeginFrame() noexcept { ++m_Frame; }
+		// Starts a frame: cached objects are checked against their assets again (once per frame), and those unused
+		// for IdleFramesBeforeRelease frames are released.
+		void BeginFrame();
 
 		// The GPU mesh of a Mesh asset; null when the handle names no loadable mesh (reported once).
 		[[nodiscard]] const GpuMesh* GetMesh(AssetHandle handle);
@@ -102,25 +108,34 @@ namespace Gambit
 		// Uploads mesh data that is not managed.
 		[[nodiscard]] Result<GpuMesh> CreateMesh(const MeshData& mesh, std::string_view debugName);
 
-		// Drops every cached object (the GPU frees them once it no longer uses them).
+		// Drops every cached object and the assets they hold (the GPU frees them once it no longer uses them).
 		void Clear();
 
 	private:
+		// A GPU copy and the asset object it was made from. Object is null when making it failed: the failure was
+		// reported and is not retried while Source stays the same.
 		template<typename T>
 		struct Entry
 		{
-			std::weak_ptr<const Asset> Source;
-			uint64_t CheckedFrame = 0;
+			Ref<const Asset> Source;
+			uint64_t CheckedFrame = 0; // the latest frame that asked for it
 			Scope<T> Object;
 		};
 
 		struct MaterialEntry
 		{
-			std::weak_ptr<const Asset> Source;
+			Ref<const Asset> Source;
 			uint64_t Version = 0;
 			uint64_t CheckedFrame = 0;
-			std::array<nvrhi::ITexture*, Gpu::MaterialTextureCount> Textures{};
+			// The textures the binding set was made with (held, so that a replaced texture is always noticed).
+			std::array<nvrhi::TextureHandle, Gpu::MaterialTextureCount> Textures{};
 			Scope<GpuMaterial> Object;
+		};
+
+		struct ModelEntry
+		{
+			Ref<Model> Source;
+			uint64_t CheckedFrame = 0;
 		};
 
 		template<typename T>
@@ -147,6 +162,7 @@ namespace Gambit
 		std::unordered_map<AssetHandle, Entry<GpuMesh>> m_Meshes;      // lookups only
 		std::unordered_map<AssetHandle, Entry<GpuTexture>> m_Textures; // lookups only
 		std::unordered_map<AssetHandle, MaterialEntry> m_Materials;    // lookups only
+		std::unordered_map<AssetHandle, ModelEntry> m_Models;          // lookups only
 		std::unordered_set<AssetHandle> m_Reported;                    // lookups only
 	};
 }

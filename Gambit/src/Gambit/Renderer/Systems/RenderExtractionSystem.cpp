@@ -28,6 +28,8 @@ namespace Gambit
 
 		m_Scene.Clear();
 		m_Scene.Tick = world.GetTick();
+		m_Scene.Time = world.GetTime();
+		m_Scene.PreviousTime = m_PreviousTime.value_or(m_Scene.Time);
 		m_Scene.Environment = m_Environment;
 
 		for (auto [handle, id, transform, camera] :
@@ -77,6 +79,13 @@ namespace Gambit
 		m_Scene.DebugLines = m_DebugDraw.GetLines();
 		m_DebugDraw.Advance(timeStep.GetSeconds());
 		m_PreviousTransforms = std::move(current);
+		m_PreviousTime = m_Scene.Time;
+	}
+
+	void RenderExtractionSystem::ResetHistory()
+	{
+		m_PreviousTransforms.clear();
+		m_PreviousTime.reset();
 	}
 
 	RenderExtractionSystem* RenderExtractionSystem::Find(World& world)

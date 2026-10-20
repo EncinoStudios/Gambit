@@ -40,6 +40,9 @@ target_link_libraries(GambitTests PRIVATE
 
 if(GB_BUILD_CLI)
     target_link_libraries(GambitTests PRIVATE GambitCLICore)
+    # The end-to-end tests of the CLI run the real binary, so building the tests builds it too.
+    add_dependencies(GambitTests GambitCLI)
+    target_compile_definitions(GambitTests PRIVATE GB_TEST_GAMBIT_EXE="$<TARGET_FILE:GambitCLI>")
 endif()
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${GB_TEST_SOURCES})

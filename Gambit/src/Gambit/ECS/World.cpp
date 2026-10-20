@@ -257,6 +257,39 @@ namespace Gambit
 		return {};
 	}
 
+	void World::SetSiblingIndex(Entity entity, size_t index)
+	{
+		GB_CORE_ASSERT(entity.GetWorld() == this && entity.IsValid(), "SetSiblingIndex: invalid entity");
+		const UUID uuid = entity.GetUUID();
+		const UUID parent = m_Registry.get<RelationshipComponent>(entity.GetHandle()).Parent;
+		if (parent.IsValid())
+		{
+			std::vector<UUID>& siblings = m_Registry.get<RelationshipComponent>(FindHandle(parent)).Children;
+			const auto current = std::ranges::find(siblings, uuid);
+			GB_CORE_ASSERT(current != siblings.end(), "the hierarchy is inconsistent");
+			siblings.erase(current);
+			siblings.insert(siblings.begin() + static_cast<std::ptrdiff_t>(std::min(index, siblings.size())), uuid);
+			return;
+		}
+		RemoveRoot(uuid);
+		const auto target = std::next(m_Roots.begin(), static_cast<std::ptrdiff_t>(std::min(index, m_Roots.size())));
+		m_RootPositions.emplace(uuid, m_Roots.insert(target, uuid));
+	}
+
+	size_t World::GetSiblingIndex(Entity entity) const
+	{
+		GB_CORE_ASSERT(entity.GetWorld() == this && entity.IsValid(), "GetSiblingIndex: invalid entity");
+		const UUID uuid = entity.GetUUID();
+		const UUID parent = m_Registry.get<RelationshipComponent>(entity.GetHandle()).Parent;
+		if (parent.IsValid())
+		{
+			const std::vector<UUID>& siblings = m_Registry.get<RelationshipComponent>(FindHandle(parent)).Children;
+			return static_cast<size_t>(std::ranges::find(siblings, uuid) - siblings.begin());
+		}
+		const std::list<UUID>::const_iterator position = m_RootPositions.at(uuid);
+		return static_cast<size_t>(std::distance(m_Roots.cbegin(), position));
+	}
+
 	Entity World::GetParent(Entity entity)
 	{
 		GB_CORE_ASSERT(entity.GetWorld() == this && entity.IsValid(), "GetParent: invalid entity");
@@ -361,6 +394,17 @@ namespace Gambit
 	{
 		m_Seed = seed;
 		m_Random.Seed(seed);
+	}
+
+	void World::BeginSimulation(uint64_t seed)
+	{
+		GB_CORE_ASSERT(!m_Ticking, "World::BeginSimulation while the world ticks");
+		SetSeed(seed);
+		m_Tick = 0;
+		m_Time = 0.0;
+		m_DeltaTime = 0.0f;
+		ClearEvents();
+		m_CommandBuffer.Clear(); // a scene file stores no pending commands either
 	}
 
 	void World::ClearEvents() noexcept

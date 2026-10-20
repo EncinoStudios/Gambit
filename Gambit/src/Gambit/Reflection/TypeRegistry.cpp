@@ -303,7 +303,7 @@ namespace Gambit
 				return Error::Format("component '{}': {}", schema.Name, valid.GetError().Message);
 			}
 			if (field.Attributes.Struct != nullptr
-			    && FindStruct(field.Attributes.Struct->GetName()) != field.Attributes.Struct)
+			    && FindStruct(field.Attributes.Struct->GetName()).get() != field.Attributes.Struct)
 			{
 				return Error::Format(
 					"component '{}': field '{}' uses struct '{}' of another registry", schema.Name, field.Name,

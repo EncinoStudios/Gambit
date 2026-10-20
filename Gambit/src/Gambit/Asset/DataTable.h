@@ -94,8 +94,15 @@ namespace Gambit
 		[[nodiscard]] Result<void>
 		SetValueFromText(std::string_view rowId, std::string_view column, std::string_view text);
 
+		// The position of the row in GetRows(); nullopt when there is no such row.
+		[[nodiscard]] std::optional<size_t> FindRowIndex(std::string_view id) const;
+
 		// Appends a row. `values` holds one value per column after the id column, or is empty for the defaults.
 		[[nodiscard]] Result<void> AddRow(std::string_view id, std::span<const FieldValue> values = {});
+		// Inserts a row before position `position` (a position beyond the last row appends), e.g. to put a removed row
+		// back where it was.
+		[[nodiscard]] Result<void>
+		InsertRow(size_t position, std::string_view id, std::span<const FieldValue> values = {});
 		[[nodiscard]] Result<void> RemoveRow(std::string_view id);
 		[[nodiscard]] Result<void> RenameRow(std::string_view id, std::string_view newId);
 

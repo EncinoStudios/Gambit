@@ -81,7 +81,10 @@ namespace Gambit
 		std::string Category;     // inspector grouping, e.g. "Physics"
 		std::string AssetType;    // AssetHandle fields (and arrays of them): the asset type they accept, e.g. "Texture"
 		Ref<const EnumInfo> Enum; // Enum fields: their values
-		Ref<const StructInfo> Struct; // Struct fields (and arrays of them): the struct they hold
+		// Struct fields (and arrays of them): the struct they hold. Not owning: the TypeRegistry owns every struct (and
+		// outlives everything that refers to one), which is also what lets a struct hold a vector of itself without
+		// a reference cycle that would never be freed.
+		const StructInfo* Struct = nullptr;
 
 		[[nodiscard]] bool HasFlag(FieldFlags flag) const noexcept { return Gambit::HasFlag(Flags, flag); }
 
@@ -180,7 +183,8 @@ namespace Gambit
 	// or as an array (Animator layers, particle modules, materials, events). Registered once with
 	// TypeRegistry::RegisterStruct. Its fields are FieldInfos like those of components, so serialization, hashing, the
 	// inspector, Lua and the CLI treat a struct field as one value with named sub-fields. Created and owned by a
-	// TypeRegistry; shared with the FieldAttributes that refer to it.
+	// TypeRegistry, which the FieldAttributes that refer to it must not outlive. A struct may hold a std::vector of
+	// itself (a tree of blend nodes).
 	class StructInfo
 	{
 		struct ConstructionKey

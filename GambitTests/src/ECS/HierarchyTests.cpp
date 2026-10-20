@@ -233,3 +233,76 @@ TEST_CASE("ECS: a disabled entity makes its whole subtree inactive")
 	}
 	CHECK(visited == std::vector<std::string>{ "Active" });
 }
+
+TEST_CASE("ECS: SetSiblingIndex moves children and roots")
+{
+	TestWorld fixture;
+	World& world = *fixture.Scene;
+	Entity parent = world.CreateEntityWithUUID(UUID(1), "Parent");
+	Entity a = world.CreateEntityWithUUID(UUID(2), "A");
+	Entity b = world.CreateEntityWithUUID(UUID(3), "B");
+	Entity c = world.CreateEntityWithUUID(UUID(4), "C");
+	Entity other = world.CreateEntityWithUUID(UUID(5), "Other");
+	for (Entity child : { a, b, c })
+	{
+		REQUIRE(world.SetParent(child, parent).HasValue());
+	}
+	const auto children = [&] {
+		std::string names;
+		for (const Entity child : world.GetChildren(parent))
+		{
+			names += child.GetName();
+		}
+		return names;
+	};
+	CHECK(children() == "ABC");
+	CHECK(world.GetSiblingIndex(a) == 0);
+	CHECK(world.GetSiblingIndex(c) == 2);
+
+	world.SetSiblingIndex(c, 0);
+	CHECK(children() == "CAB");
+	world.SetSiblingIndex(c, 1);
+	CHECK(children() == "ACB");
+	world.SetSiblingIndex(a, 99); // beyond the last position: to the end
+	CHECK(children() == "CBA");
+	CHECK(world.GetSiblingIndex(a) == 2);
+	world.SetSiblingIndex(b, 1); // already there
+	CHECK(children() == "CBA");
+
+	// Roots: Parent, Other.
+	const auto roots = [&] {
+		std::string names;
+		for (const Entity root : world.GetRoots())
+		{
+			names += root.GetName() + ",";
+		}
+		return names;
+	};
+	CHECK(roots() == "Parent,Other,");
+	world.SetSiblingIndex(other, 0);
+	CHECK(roots() == "Other,Parent,");
+	CHECK(world.GetSiblingIndex(other) == 0);
+	CHECK(world.GetSiblingIndex(parent) == 1);
+	world.SetSiblingIndex(other, 5);
+	CHECK(roots() == "Parent,Other,");
+
+	// Detaching and attaching still works after the roots were reordered.
+	REQUIRE(world.SetParent(other, parent).HasValue());
+	CHECK(roots() == "Parent,");
+	REQUIRE(world.SetParent(other, Entity()).HasValue());
+	CHECK(roots() == "Parent,Other,");
+
+	// Sibling order is part of the state hash of children.
+	TestWorld second;
+	World& twin = *second.Scene;
+	Entity twinParent = twin.CreateEntityWithUUID(parent.GetUUID(), "Parent");
+	for (const Entity child : world.GetChildren(parent))
+	{
+		Entity copy = twin.CreateEntityWithUUID(child.GetUUID(), child.GetName());
+		REQUIRE(twin.SetParent(copy, twinParent).HasValue());
+	}
+	REQUIRE(twin.CreateEntityWithUUID(other.GetUUID(), "Other").IsValid());
+	CHECK(twin.ComputeStateHash() == world.ComputeStateHash());
+	twin.SetSiblingIndex(twin.GetChildren(twinParent).front(), 2);
+	CHECK(twin.ComputeStateHash() != world.ComputeStateHash());
+}

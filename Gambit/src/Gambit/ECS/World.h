@@ -87,6 +87,12 @@ namespace Gambit
 		[[nodiscard]] Entity GetParent(Entity entity);
 		// In sibling order.
 		[[nodiscard]] std::vector<Entity> GetChildren(Entity entity);
+		// Moves `entity` to position `index` among its siblings (the children of its parent, or the roots); an index
+		// beyond the last position moves it to the end. Sibling order of children is simulation state (hashed with the
+		// parent's Relationship), the order of roots is presentation state.
+		void SetSiblingIndex(Entity entity, size_t index);
+		// The position of `entity` among its siblings (see SetSiblingIndex).
+		[[nodiscard]] size_t GetSiblingIndex(Entity entity) const;
 		// The entities without a parent in a stable order: the order in which they became roots (creation, or
 		// detachment from a parent). Root order is presentation state: it is copied but not hashed.
 		[[nodiscard]] std::vector<Entity> GetRoots();
@@ -121,6 +127,14 @@ namespace Gambit
 		[[nodiscard]] uint64_t GetSeed() const noexcept { return m_Seed; }
 		// Stores the seed and reseeds the random generator with it.
 		void SetSeed(uint64_t seed);
+		// Starts a simulation from the entities as they are (D-020 "Simulation start"): reseeds the random generator
+		// from `seed` (the scene's seed), zeroes the tick counter and the simulated time, drops the events of both
+		// buffers and the pending commands of the command buffer. A scene file stores only the seed, so this is what
+		// makes a copy of an edited scene (whose random generator, events and command buffer may have been used by
+		// editing or an earlier run) start exactly like the same scene loaded from its file. Every simulation entry
+		// point calls it once, before the systems are created and before the first tick: editor play, `sim.run`, Lua
+		// tests, runtime scene load. Not while ticking.
+		void BeginSimulation(uint64_t seed);
 		// The number of Play ticks run (the tick being run, during a tick).
 		[[nodiscard]] uint64_t GetTick() const noexcept { return m_Tick; }
 		// Simulated seconds: the sum of the time steps of the Play ticks so far, including the current one.

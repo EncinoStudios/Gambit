@@ -1,5 +1,7 @@
 #include "Cli/CommandDispatcher.h"
 
+#include "Gambit/Core/Assert.h"
+
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
@@ -39,7 +41,7 @@ namespace Gambit::Cli
 		const Result<void> registered = Register(Command{
 			.Name = "help",
 			.Summary = "Show help for " + m_ProgramName + " or for one of its commands",
-			.Usage = "[<command>]",
+			.Usage = "[<command>...]",
 			.Aliases = { "--help", "-h" },
 			.Handler =
 				[this](const CommandContext& context, std::span<const std::string> args) {
@@ -48,19 +50,25 @@ namespace Gambit::Cli
 						PrintHelp(context.Out);
 						return ExitSuccess;
 					}
-					if (args.size() > 1)
+					if (const Command* command = Find(args[0]); command != nullptr)
 					{
-						context.Err << m_ProgramName << ": 'help' takes at most one command name\n";
-						return ExitUsage;
+						if (args.size() > 1)
+						{
+							context.Err << m_ProgramName << ": 'help' takes at most one command name\n";
+							return ExitUsage;
+						}
+						PrintCommandHelp(context.Out, *command);
+						return ExitSuccess;
 					}
-					const Command* command = Find(args[0]);
-					if (command == nullptr)
+					for (const Ref<ICommandProvider>& provider : m_Providers)
 					{
-						context.Err << m_ProgramName << ": unknown command '" << args[0] << "'\n";
-						return ExitUsage;
+						if (provider->TryPrintHelp(args, context))
+						{
+							return ExitSuccess;
+						}
 					}
-					PrintCommandHelp(context.Out, *command);
-					return ExitSuccess;
+					context.Err << m_ProgramName << ": unknown command '" << args[0] << "'\n";
+					return ExitUsage;
 				},
 		});
 		GB_CORE_VERIFY(registered.HasValue(), "built-in help command rejected: {}", registered.GetError().Message);
@@ -103,6 +111,12 @@ namespace Gambit::Cli
 		return {};
 	}
 
+	void CommandDispatcher::AddProvider(Ref<ICommandProvider> provider)
+	{
+		GB_CORE_ASSERT(provider != nullptr, "a null command provider");
+		m_Providers.push_back(std::move(provider));
+	}
+
 	const Command* CommandDispatcher::Find(std::string_view nameOrAlias) const
 	{
 		for (const Command& command : m_Commands)
@@ -126,6 +140,13 @@ namespace Gambit::Cli
 		const Command* command = Find(args.front());
 		if (command == nullptr)
 		{
+			for (const Ref<ICommandProvider>& provider : m_Providers)
+			{
+				if (const std::optional<int> exitCode = provider->TryRun(args, context); exitCode.has_value())
+				{
+					return *exitCode;
+				}
+			}
 			context.Err << m_ProgramName << ": unknown command '" << args.front() << "'\n"
 						<< "Run '" << m_ProgramName << " --help' for the list of commands.\n";
 			return ExitUsage;
@@ -153,6 +174,10 @@ namespace Gambit::Cli
 		{
 			out << "  " << std::left << std::setw(static_cast<int>(width)) << command.Name << "  " << command.Summary
 				<< '\n';
+		}
+		for (const Ref<ICommandProvider>& provider : m_Providers)
+		{
+			provider->PrintCommandList(out);
 		}
 		out << "\nRun '" << m_ProgramName << " help <command>' for details on a command.\n";
 	}

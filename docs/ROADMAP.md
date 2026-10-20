@@ -16,7 +16,7 @@ A task is `done` only when it builds warning-free, all tests pass, it passed cod
 ## M2 — ECS, reflection, serialization, automation core
 | T04 | TypeRegistry reflection, World/Entity on EnTT, core components, system scheduler, command buffer, state hash | done |
 | T05 | JSON scene/prefab serialization, Project files, AssetManager + .meta, DataTable (CSV) | done |
-| T06 | CommandRegistry + EditorContext + undo/redo; `gambit` CLI skeleton; comments system | todo |
+| T06 | CommandRegistry + EditorContext + undo/redo; `gambit` CLI skeleton; comments system | done |
 
 ## M3–M4 — Rendering
 | T07 | GraphicsDevice (NVRHI/Vulkan windowed+headless), glslang shader pipeline, readback, first golden test | done |

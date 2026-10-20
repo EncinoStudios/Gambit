@@ -1,9 +1,11 @@
 #pragma once
 
+#include "Gambit/Core/Base.h"
 #include "Gambit/Core/Result.h"
 
 #include <functional>
-#include <iosfwd>
+#include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -18,8 +20,9 @@ namespace Gambit::Cli
 	// Streams a command writes to. Injected so that commands can be unit tested without spawning a process.
 	struct CommandContext
 	{
-		std::ostream& Out; // results, intended to be piped
-		std::ostream& Err; // diagnostics and usage errors
+		std::ostream& Out;           // results, intended to be piped
+		std::ostream& Err;           // diagnostics and usage errors
+		std::istream& In = std::cin; // input a command may read (`gambit batch -`)
 	};
 
 	// `args` are the arguments after the command name. Returns the process exit code.
@@ -35,8 +38,26 @@ namespace Gambit::Cli
 		CommandHandler Handler{};
 	};
 
-	// Maps `gambit <command> ...` to handlers and provides the built-in `help` command. Later tasks add their
-	// commands in RegisterBuiltinCommands; the dispatcher itself does not change.
+	// A source of commands that are not registered by name because their names have several words: the automation
+	// commands of the command registry (`entity create` and `entity.create` are the same command). The dispatcher asks
+	// its providers about everything it does not know itself.
+	class ICommandProvider
+	{
+	public:
+		virtual ~ICommandProvider() = default;
+
+		// Runs the command line if its leading words name a command of this provider; nullopt when they do not.
+		[[nodiscard]] virtual std::optional<int>
+		TryRun(std::span<const std::string> args, const CommandContext& context) = 0;
+		// Prints the help of the command the words name; false when they name none of this provider's.
+		[[nodiscard]] virtual bool TryPrintHelp(std::span<const std::string> words, const CommandContext& context) = 0;
+		// Appended to the command list that `help` prints.
+		virtual void PrintCommandList(std::ostream& out) const = 0;
+	};
+
+	// Maps `gambit <command> ...` to handlers and provides the built-in `help` command. Commands with one-word names
+	// are registered by name (RegisterBuiltinCommands, and `batch` and `commands` in RegisterAutomationCommands);
+	// everything else goes to the providers, such as the AutomationProvider that runs the command registry.
 	class CommandDispatcher
 	{
 	public:
@@ -53,6 +74,9 @@ namespace Gambit::Cli
 		// Finds a command by name or alias; null when there is none.
 		[[nodiscard]] const Command* Find(std::string_view nameOrAlias) const;
 
+		// Command lines that name no registered command go to the providers in the order they were added.
+		void AddProvider(Ref<ICommandProvider> provider);
+
 		// Runs `args[0]` with the remaining arguments. Without arguments prints the command list to Err and returns
 		// ExitUsage; `<command> --help` prints that command's usage.
 		[[nodiscard]] int Run(std::span<const std::string> args, const CommandContext& context) const;
@@ -63,8 +87,10 @@ namespace Gambit::Cli
 	private:
 		std::string m_ProgramName;
 		std::vector<Command> m_Commands; // sorted by name
+		std::vector<Ref<ICommandProvider>> m_Providers;
 	};
 
-	// Registers every command the gambit tool ships with (currently `version`).
+	// Registers the commands of the tool itself (`version`); the automation commands come from
+	// RegisterAutomationCommands (Cli/AutomationCommands.h).
 	void RegisterBuiltinCommands(CommandDispatcher& dispatcher);
 }

@@ -8,7 +8,9 @@
 #include "Gambit/ECS/World.h"
 #include "Gambit/Reflection/FieldHashing.h"
 #include "Gambit/Reflection/TypeRegistry.h"
+#include "Gambit/Serialization/FieldSerializer.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,7 +36,7 @@ namespace
 	FieldAttributes StructAttributes(Ref<const StructInfo> info)
 	{
 		FieldAttributes attributes;
-		attributes.Struct = std::move(info);
+		attributes.Struct = info.get();
 		return attributes;
 	}
 
@@ -103,12 +105,12 @@ TEST_CASE("Reflection: structs are registered with their fields and defaults")
 	CHECK(layer->FindField("Mode")->Type == FieldType::Enum);
 	CHECK(layer->FindField("Tint")->Type == FieldType::Color3);
 	CHECK(layer->FindField("Stats")->Type == FieldType::Struct);
-	CHECK(layer->FindField("Stats")->Attributes.Struct == stats);
+	CHECK(layer->FindField("Stats")->Attributes.Struct == stats.get());
 	CHECK(layer->FindField("Curve")->Type == FieldType::Array);
 	CHECK(layer->FindField("Curve")->ElementType == FieldType::Float);
 	CHECK(layer->FindField("History")->Type == FieldType::Array);
 	CHECK(layer->FindField("History")->ElementType == FieldType::Struct);
-	CHECK(layer->FindField("History")->Attributes.Struct == stats);
+	CHECK(layer->FindField("History")->Attributes.Struct == stats.get());
 	CHECK(layer->FindField("Cache")->HasFlag(FieldFlags::NotHashed));
 	CHECK(layer->FindField("Unreflected") == nullptr);
 	const auto& nested = std::get<StructValue>(layer->GetDefault().Values[5]);
@@ -117,7 +119,7 @@ TEST_CASE("Reflection: structs are registered with their fields and defaults")
 	// The component that uses them.
 	const ComponentInfo& structs = registry.GetComponent<StructsComponent>();
 	CHECK(structs.FindField("Main")->Type == FieldType::Struct);
-	CHECK(structs.FindField("Main")->Attributes.Struct == layer);
+	CHECK(structs.FindField("Main")->Attributes.Struct == layer.get());
 	CHECK(structs.FindField("Layers")->Type == FieldType::Array);
 	CHECK(structs.FindField("Layers")->ElementType == FieldType::Struct);
 	CHECK(structs.FindField("Source")->Type == FieldType::UUID);
@@ -439,4 +441,75 @@ TEST_CASE("Reflection: invalid struct fields in script components are rejected w
 			.find("another registry")
 		!= std::string::npos);
 	CHECK(registry.FindComponent("Broken") == nullptr);
+}
+
+namespace
+{
+	// A struct that holds a vector of itself, like a blend tree.
+	struct TestNode
+	{
+		int32_t Value = 1;
+		std::vector<TestNode> Children;
+	};
+
+	struct TreeComponent
+	{
+		TestNode Root;
+	};
+}
+
+TEST_CASE("Reflection: a struct can hold a vector of itself and the registry frees it")
+{
+	std::weak_ptr<const StructInfo> observed;
+	{
+		TypeRegistry registry;
+		RegisterEngineTypes(registry);
+		registry.RegisterStruct<TestNode>("TestNode")
+			.Field("Value", &TestNode::Value)
+			.Field("Children", &TestNode::Children);
+		registry.RegisterComponent<TreeComponent>("Tree").Field("Root", &TreeComponent::Root);
+
+		const Ref<const StructInfo> node = registry.FindStruct("TestNode");
+		REQUIRE(node != nullptr);
+		observed = node;
+		const FieldInfo& children = *node->FindField("Children");
+		CHECK(children.Type == FieldType::Array);
+		CHECK(children.ElementType == FieldType::Struct);
+		CHECK(children.Attributes.Struct == node.get()); // refers to itself, without owning itself
+
+		TreeComponent tree;
+		tree.Root.Value = 10;
+		tree.Root.Children.resize(2);
+		tree.Root.Children[1].Value = 20;
+		tree.Root.Children[1].Children.resize(1);
+		tree.Root.Children[1].Children[0].Value = 30;
+
+		const FieldInfo& root = *registry.GetComponent<TreeComponent>().FindField("Root");
+		const FieldValue value = root.GetValue(&tree);
+		CHECK(std::get<StructValue>(value).Values.size() == 2);
+
+		// Values, JSON and hashing see the whole tree.
+		TreeComponent copy;
+		REQUIRE(root.SetValue(&copy, value));
+		REQUIRE(copy.Root.Children.size() == 2);
+		CHECK(copy.Root.Children[1].Children[0].Value == 30);
+		const Result<Json> json = FieldValueToJson(root, value);
+		REQUIRE(json.HasValue());
+		CHECK(json->at("Children")[1].at("Children")[0].at("Value") == 30);
+		LoadReport report;
+		const Result<FieldValue> decoded = FieldValueFromJson(root, *json, "", report);
+		REQUIRE(decoded.HasValue());
+		CHECK(*decoded == value);
+
+		Hasher fromObject(1);
+		root.HashValue(fromObject, &tree);
+		Hasher fromValue(1);
+		HashFieldValue(fromValue, root, value);
+		CHECK(fromObject.Digest() == fromValue.Digest());
+		copy.Root.Children[1].Children[0].Value = 31;
+		Hasher changed(1);
+		root.HashValue(changed, &copy);
+		CHECK(changed.Digest() != fromObject.Digest());
+	}
+	CHECK(observed.expired()); // the cycle through the field would have kept it alive forever
 }

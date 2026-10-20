@@ -289,3 +289,11 @@ with a warning, until model-level overrides are defined. GPU copies (`RenderReso
 extensions are ignored. A material has one UV transform (`UVTiling`/`UVOffset`, taken from the first textured slot's
 `KHR_texture_transform`, rotation unsupported) and samples every texture with `TEXCOORD_0`; both limits are warnings on
 import. Points and lines are skipped; skins, animations and morph targets arrive with T14.
+
+**D-046 Exposure.** Exposure is EV100 everywhere. `ProjectSettings.Rendering` holds `ExposureEV100` (default 15,
+replacing the linear `Exposure` multiplier via a `.gproject` migration); extraction passes it to every view unless
+the camera's `PostProcessComponent` (T09) overrides it (manual EV100 or auto-exposure).
+
+**D-047 Asset reference attributes accept several types.** `Attr::AssetType` holds a list of accepted
+`AssetType`s (e.g. `MeshRenderer.Mesh` accepts `Mesh` and `Model`). Serialization, inspector pickers, Lua and
+command schemas validate against the list.

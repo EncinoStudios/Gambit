@@ -20,7 +20,7 @@ A task is `done` only when it builds warning-free, all tests pass, it passed cod
 
 ## M3–M4 — Rendering
 | T07 | GraphicsDevice (NVRHI/Vulkan windowed+headless), glslang shader pipeline, readback, first golden test | done |
-| T08 | Mesh/Texture/Material assets, glTF import, forward PBR, camera, lights, debug lines | todo |
+| T08 | Mesh/Texture/Material assets, glTF import, forward PBR, camera, lights, debug lines | done |
 | T09 | IBL (HDR→cube, irradiance, prefilter, BRDF LUT), skybox, HDR + tonemapping + bloom | todo |
 | T10 | Cascaded soft shadow maps (PCF/PCSS), SSAO (GTAO + bilateral blur) | todo |
 

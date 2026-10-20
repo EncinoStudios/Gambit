@@ -60,7 +60,7 @@ TEST_CASE("Reflection: script components are registered from a schema")
 	const auto position = std::ranges::find(components, &info);
 	REQUIRE(position != components.end());
 	CHECK((*(position - 1))->GetName() == "Relationship");
-	CHECK((*(position + 1))->GetName() == "Structs");
+	CHECK((*(position + 1))->GetName() == "SpotLight");
 
 	// Registering the same schema again (a script reload) returns the same type.
 	const Result<const ComponentInfo*> again = registry.RegisterDynamicComponent(MakeScriptSchema());
@@ -220,7 +220,7 @@ TEST_CASE("Reflection: invalid script component schemas are rejected with a reas
 
 	// Nothing failed half-way: only the valid schema was added.
 	CHECK(registry.FindComponent("Broken") == nullptr);
-	CHECK(registry.GetComponents().size() == 14);
+	CHECK(registry.GetComponents().size() == 19);
 }
 
 TEST_CASE("Reflection: unregistering a script component removes its instances from every world")

@@ -4,10 +4,12 @@
 #include <doctest/doctest.h>
 
 #include <GLFW/glfw3.h>
+#include <cgltf.h>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <lz4.h>
 #include <lz4frame.h>
+#include <mikktspace.h>
 #include <monocypher-ed25519.h>
 #include <monocypher.h>
 #include <nlohmann/json.hpp>
@@ -219,4 +221,71 @@ TEST_CASE("ThirdParty: Vulkan-Headers and NVRHI are the pinned versions")
 	CHECK(VK_HEADER_VERSION == 352);
 	CHECK(nvrhi::c_HeaderVersion == 27);
 	CHECK(nvrhi::verifyHeaderVersion());
+}
+
+TEST_CASE("ThirdParty: cgltf parses glTF from memory, including the extensions of v1.15")
+{
+	// KHR_materials_diffuse_transmission is the newest extension cgltf v1.15 knows; an older cgltf would not compile
+	// or would ignore it.
+	constexpr std::string_view Document = R"({
+		"asset": { "version": "2.0" },
+		"materials": [ { "name": "Leaf", "extensions": { "KHR_materials_diffuse_transmission": {
+			"diffuseTransmissionFactor": 0.25 } } } ],
+		"extensionsUsed": [ "KHR_materials_diffuse_transmission" ]
+	})";
+	cgltf_options options{};
+	cgltf_data* data = nullptr;
+	REQUIRE(cgltf_parse(&options, Document.data(), Document.size(), &data) == cgltf_result_success);
+	REQUIRE(data->materials_count == 1);
+	CHECK(std::string_view(data->materials[0].name) == "Leaf");
+	CHECK(data->materials[0].has_diffuse_transmission);
+	CHECK(data->materials[0].diffuse_transmission.diffuse_transmission_factor == 0.25f);
+	CHECK(cgltf_validate(data) == cgltf_result_success);
+	cgltf_free(data);
+}
+
+namespace
+{
+	// One quad in the XY plane, u along +X and v along +Y.
+	struct MikkQuad
+	{
+		std::array<std::array<float, 3>, 4> Positions = { { { 0, 0, 0 }, { 1, 0, 0 }, { 1, 1, 0 }, { 0, 1, 0 } } };
+		std::array<std::array<float, 2>, 4> UVs = { { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } } };
+		std::array<std::array<float, 4>, 4> Tangents{};
+	};
+}
+
+TEST_CASE("ThirdParty: MikkTSpace generates tangents along +U")
+{
+	MikkQuad quad;
+	SMikkTSpaceInterface callbacks{};
+	callbacks.m_getNumFaces = [](const SMikkTSpaceContext*) { return 1; };
+	callbacks.m_getNumVerticesOfFace = [](const SMikkTSpaceContext*, int) { return 4; };
+	callbacks.m_getPosition = [](const SMikkTSpaceContext* context, float* out, int, int vertex) {
+		const auto* data = static_cast<const MikkQuad*>(context->m_pUserData);
+		std::memcpy(out, data->Positions[static_cast<size_t>(vertex)].data(), sizeof(float) * 3);
+	};
+	callbacks.m_getNormal = [](const SMikkTSpaceContext*, float* out, int, int) {
+		out[0] = 0.0f;
+		out[1] = 0.0f;
+		out[2] = 1.0f;
+	};
+	callbacks.m_getTexCoord = [](const SMikkTSpaceContext* context, float* out, int, int vertex) {
+		const auto* data = static_cast<const MikkQuad*>(context->m_pUserData);
+		std::memcpy(out, data->UVs[static_cast<size_t>(vertex)].data(), sizeof(float) * 2);
+	};
+	callbacks.m_setTSpaceBasic = [](const SMikkTSpaceContext* context, const float* tangent, float sign, int,
+	                                int vertex) {
+		auto* data = static_cast<MikkQuad*>(context->m_pUserData);
+		data->Tangents[static_cast<size_t>(vertex)] = { tangent[0], tangent[1], tangent[2], sign };
+	};
+	SMikkTSpaceContext context{ &callbacks, &quad };
+	REQUIRE(genTangSpaceDefault(&context) != 0);
+	for (const std::array<float, 4>& tangent : quad.Tangents)
+	{
+		CHECK(tangent[0] == doctest::Approx(1.0f));
+		CHECK(tangent[1] == doctest::Approx(0.0f));
+		CHECK(tangent[2] == doctest::Approx(0.0f));
+		CHECK(tangent[3] == doctest::Approx(1.0f));
+	}
 }

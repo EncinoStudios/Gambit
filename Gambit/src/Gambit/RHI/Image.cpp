@@ -260,7 +260,7 @@ namespace Gambit
 	{
 		if (data.Empty() || data.Size() > size_t(std::numeric_limits<int>::max()))
 		{
-			return Error(std::format("cannot decode {} bytes as PNG", data.Size()));
+			return Error(std::format("cannot decode {} bytes as an image", data.Size()));
 		}
 		const auto* bytes = reinterpret_cast<const stbi_uc*>(data.Data());
 		const int length = static_cast<int>(data.Size());
@@ -274,7 +274,7 @@ namespace Gambit
 		stbi_uc* pixels = stbi_load_from_memory(bytes, length, &width, &height, &channels, 4);
 		if (pixels == nullptr)
 		{
-			return Error(std::format("cannot decode the PNG: {}", stbi_failure_reason()));
+			return Error(std::format("cannot decode the image: {}", stbi_failure_reason()));
 		}
 		const auto* begin = reinterpret_cast<const std::byte*>(pixels);
 		std::vector<std::byte> copy(begin, begin + size_t(width) * size_t(height) * 4);

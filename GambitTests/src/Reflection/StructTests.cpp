@@ -69,7 +69,7 @@ TEST_CASE("Reflection: structs are registered with their fields and defaults")
 	CHECK(registry.FindStruct("Missing") == nullptr);
 	CHECK(registry.FindStruct<HealthComponent>() == nullptr);
 
-	// Sorted by name, with the engine's own structs (the project settings).
+	// Sorted by name, with the engine's own structs (the project settings, materials, texture import settings).
 	std::vector<std::string> names;
 	for (const StructInfo* info : registry.GetStructs())
 	{
@@ -77,10 +77,10 @@ TEST_CASE("Reflection: structs are registered with their fields and defaults")
 	}
 	CHECK(
 		names
-		== std::vector<std::string>{ "ExportSettings", "ProjectDirectories", "ProjectSettings", "RenderingSettings",
-	                                 "TestLayer", "TestStats" });
-	CHECK(registry.GetStructs()[4] == layer.get());
-	CHECK(registry.GetStructs()[5] == stats.get());
+		== std::vector<std::string>{ "ExportSettings", "Material", "ProjectDirectories", "ProjectSettings",
+	                                 "RenderingSettings", "TestLayer", "TestStats", "TextureImportSettings" });
+	CHECK(registry.GetStructs()[5] == layer.get());
+	CHECK(registry.GetStructs()[6] == stats.get());
 
 	CHECK(stats->GetName() == "TestStats");
 	REQUIRE(stats->GetFields().size() == 3);
@@ -132,7 +132,7 @@ TEST_CASE("Reflection: structs are registered with their fields and defaults")
 	TypeRegistry other;
 	RegisterEngineTypes(other);
 	CHECK(other.FindStruct("TestStats") == nullptr);
-	CHECK(other.GetStructs().size() == 4);
+	CHECK(other.GetStructs().size() == 6);
 }
 
 TEST_CASE("Reflection: struct fields are read and written through FieldValue")

@@ -24,7 +24,8 @@ Every dependency is a pinned git submodule (D-003). Rules:
 | sol2 | `sol2` | tag `v3.5.0` | `9190880c593d` | MIT | T11 |
 | miniaudio | `miniaudio` | tag `0.11.25` | `9634bedb5b5a` | public domain / MIT-0 | T16 |
 | stb | `stb` | `master` HEAD | `2c980bb59875` | public domain / MIT | wired: `stb::stb` (headers; the engine compiles `stb_image` + `stb_image_write` once, without stdio) |
-| cgltf | `cgltf` | tag `v1.15` | `360db1a95480` | MIT | T08 |
+| cgltf | `cgltf` | tag `v1.15` | `360db1a95480` | MIT | wired: `cgltf::cgltf` (header; the engine compiles the implementation once and parses from memory) |
+| MikkTSpace | `mikktspace` | `master` HEAD | `3e895b49d05e` | zlib | wired: `mikktspace::mikktspace` (tangent generation of the glTF importer, D-037) |
 | nlohmann/json | `nlohmann_json` | tag `v3.12.0` | `55f93686c015` | MIT | wired: `nlohmann_json::nlohmann_json` |
 | doctest | `doctest` | tag `v2.5.3` | `2d0a9359a60c` | MIT | wired: `doctest::doctest` |
 | glslang | `glslang` | tag `vulkan-sdk-1.4.363.0` | `e1b562a8bed2` | BSD-3-Clause (+ Apache-2.0, MIT parts; see `LICENSE.txt`) | wired: `glslang-standalone` (build-time shader compiler, see note) |

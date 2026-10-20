@@ -12,7 +12,7 @@ namespace Gambit
 			std::string_view Name;
 		};
 
-		constexpr std::array<TypeName, 15> TypeNames = { {
+		constexpr std::array<TypeName, 16> TypeNames = { {
 			{ AssetType::None, "None" },
 			{ AssetType::Scene, "Scene" },
 			{ AssetType::Prefab, "Prefab" },
@@ -28,6 +28,7 @@ namespace Gambit
 			{ AssetType::AnimationClip, "AnimationClip" },
 			{ AssetType::Skeleton, "Skeleton" },
 			{ AssetType::InputActions, "InputActions" },
+			{ AssetType::Model, "Model" },
 		} };
 
 		struct Extension
@@ -39,8 +40,8 @@ namespace Gambit
 		constexpr std::array<Extension, 20> Extensions = { {
 			{ ".gscene", AssetType::Scene },      { ".gprefab", AssetType::Prefab },  { ".png", AssetType::Texture },
 			{ ".jpg", AssetType::Texture },       { ".jpeg", AssetType::Texture },    { ".tga", AssetType::Texture },
-			{ ".bmp", AssetType::Texture },       { ".hdr", AssetType::Environment }, { ".glb", AssetType::Mesh },
-			{ ".gltf", AssetType::Mesh },         { ".gmat", AssetType::Material },   { ".lua", AssetType::Script },
+			{ ".bmp", AssetType::Texture },       { ".hdr", AssetType::Environment }, { ".glb", AssetType::Model },
+			{ ".gltf", AssetType::Model },        { ".gmat", AssetType::Material },   { ".lua", AssetType::Script },
 			{ ".wav", AssetType::Audio },         { ".ogg", AssetType::Audio },       { ".mp3", AssetType::Audio },
 			{ ".flac", AssetType::Audio },        { ".ttf", AssetType::Font },        { ".otf", AssetType::Font },
 			{ ".svg", AssetType::VectorGraphic }, { ".csv", AssetType::DataTable },

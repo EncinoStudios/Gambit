@@ -3,6 +3,7 @@
 #include "Gambit/Asset/Asset.h"
 #include "Gambit/Asset/AssetMetadata.h"
 #include "Gambit/Asset/AssetRegistry.h"
+#include "Gambit/Asset/SubAssetHandles.h"
 #include "Gambit/Core/Result.h"
 #include "Gambit/Core/VFS.h"
 #include "Gambit/Reflection/TypeRegistry.h"
@@ -17,12 +18,12 @@ namespace Gambit
 		const AssetMetadata& Metadata; // import settings from the .meta file
 		const VFS& Vfs;                // read the file (and anything it refers to) through this
 		const TypeRegistry& Types;
-		LoadReport& Report; // non-fatal problems; the manager logs them
+		LoadReport& Report;         // non-fatal problems; the manager logs them
+		SubAssetHandles& SubAssets; // handles for the assets created inside this one (Asset::GetSubAssets)
 	};
 
-	// Loads the assets of one type from their files (D-014). Registered with AssetManager::RegisterImporter; the
-	// engine registers the importers of scenes, prefabs and data tables, other modules add theirs (textures, meshes,
-	// ...).
+	// Loads the assets of one type from their files (D-014). Registered with AssetManager::RegisterImporter; every
+	// manager starts with the importers of the engine (RegisterEngineAssets).
 	class IAssetImporter
 	{
 	public:

@@ -76,9 +76,9 @@ TEST_CASE("Reflection: components are found by name, id and type")
 	CHECK(std::ranges::is_sorted(names));
 	CHECK(
 		names
-		== std::vector<std::string>{ "AllTypes", "DataRef", "Disabled", "Health", "ID", "Inactive", "PlayerTag",
-	                                 "PrefabInstance", "Relationship", "Structs", "Tag", "Transform",
-	                                 "WorldTransform" });
+		== std::vector<std::string>{ "AllTypes", "Camera", "DataRef", "DirectionalLight", "Disabled", "Health", "ID",
+	                                 "Inactive", "MeshRenderer", "PlayerTag", "PointLight", "PrefabInstance",
+	                                 "Relationship", "SpotLight", "Structs", "Tag", "Transform", "WorldTransform" });
 }
 
 TEST_CASE("Reflection: the process-wide registry has the core components")

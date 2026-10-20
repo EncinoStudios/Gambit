@@ -10,9 +10,11 @@ add_executable(GambitTests ${GB_TEST_SOURCES})
 gambit_configure_target(GambitTests)
 target_include_directories(GambitTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # Tests that regenerate checked-in reference data (GB_UPDATE_GOLDEN=1) write into the source tree. Golden-image
-# mismatches leave the actual and diff images in build/test-output.
+# mismatches leave the actual and diff images in build/test-output. Assets/ holds generated test content (glTF models
+# from tools/gen_test_gltf.py) that tests copy into temporary projects.
 target_compile_definitions(GambitTests PRIVATE
     GB_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src"
+    GB_TEST_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Assets"
     GB_TEST_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Golden"
     GB_TEST_OUTPUT_DIR="${PROJECT_SOURCE_DIR}/build/test-output")
 
@@ -31,6 +33,8 @@ target_link_libraries(GambitTests PRIVATE
     xxhash::xxhash
     monocypher::monocypher
     stb::stb
+    cgltf::cgltf
+    mikktspace::mikktspace
     # Tests reach the Vulkan objects behind NVRHI (the validation test) and pin the headers' version.
     Vulkan::Headers)
 

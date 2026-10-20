@@ -90,7 +90,8 @@ namespace Gambit
 	ConvertImage(const Image& source, ImageFormat format, TransferFunction transfer = TransferFunction::Linear);
 
 	// PNG files hold 8-bit RGBA (stb_image / stb_image_write). Encoding requires an RGBA8 image; decoding accepts any
-	// 8- or 16-bit PNG and returns RGBA8 (grey and RGB gain opaque alpha, 16-bit values are reduced to 8 bits).
+	// 8- or 16-bit PNG, and the other 8-bit formats stb_image reads (JPEG, TGA, BMP), and returns RGBA8 (grey and RGB
+	// gain opaque alpha, 16-bit values are reduced to 8 bits). DecodeTextureImage (Renderer) adds Radiance HDR.
 	[[nodiscard]] Result<Buffer> EncodePng(const Image& image);
 	[[nodiscard]] Result<Image> DecodePng(BufferView data);
 	// File variants of the above for tools and tests; engine content goes through the VFS and the in-memory versions.

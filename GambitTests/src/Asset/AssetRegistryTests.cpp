@@ -29,7 +29,7 @@ namespace
 
 TEST_CASE("Asset: asset types have names and are detected from file names")
 {
-	for (int index = 1; index <= static_cast<int>(AssetType::InputActions); ++index)
+	for (int index = 1; index <= static_cast<int>(AssetType::Model); ++index)
 	{
 		const auto type = static_cast<AssetType>(index);
 		CHECK_MESSAGE(ParseAssetType(ToString(type)) == type, ToString(type));
@@ -44,8 +44,8 @@ TEST_CASE("Asset: asset types have names and are detected from file names")
 	CHECK(DetectAssetType("Assets/Crate.PNG") == AssetType::Texture); // any case
 	CHECK(DetectAssetType("Assets/a.jpg") == AssetType::Texture);
 	CHECK(DetectAssetType("Assets/sky.hdr") == AssetType::Environment);
-	CHECK(DetectAssetType("Assets/Crate.glb") == AssetType::Mesh);
-	CHECK(DetectAssetType("Assets/Crate.gltf") == AssetType::Mesh);
+	CHECK(DetectAssetType("Assets/Crate.glb") == AssetType::Model);
+	CHECK(DetectAssetType("Assets/Crate.gltf") == AssetType::Model);
 	CHECK(DetectAssetType("Assets/Wood.gmat") == AssetType::Material);
 	CHECK(DetectAssetType("Scripts/Spin.lua") == AssetType::Script);
 	CHECK(DetectAssetType("Assets/hit.wav") == AssetType::Audio);
@@ -120,7 +120,7 @@ TEST_CASE("Asset: the registry keeps handles, paths and types in step")
 {
 	AssetRegistry registry;
 	REQUIRE(registry.Add({ UUID(1), "Assets/B.png", AssetType::Texture }).HasValue());
-	REQUIRE(registry.Add({ UUID(2), "Assets/A.glb", AssetType::Mesh }).HasValue());
+	REQUIRE(registry.Add({ UUID(2), "Assets/A.glb", AssetType::Model }).HasValue());
 	REQUIRE(registry.Add({ UUID(3), "Data/T.csv", AssetType::DataTable }).HasValue());
 	CHECK(registry.GetCount() == 3);
 	CHECK(registry.Contains(UUID(2)));
@@ -191,7 +191,7 @@ TEST_CASE("Asset: a scan registers assets and creates the .meta files they lack"
 	REQUIRE(crate != nullptr);
 	CHECK(crate->Type == AssetType::Texture);
 	CHECK(crate->Handle.IsValid());
-	CHECK(registry.FindByPath("Assets/Sub/Barrel.glb")->Type == AssetType::Mesh);
+	CHECK(registry.FindByPath("Assets/Sub/Barrel.glb")->Type == AssetType::Model);
 	CHECK(registry.FindByPath("Scenes/Main.gscene")->Type == AssetType::Scene);
 	CHECK(registry.FindByPath("Data/Weapons.csv")->Type == AssetType::DataTable);
 

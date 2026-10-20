@@ -248,3 +248,44 @@ synchronization2, dynamic rendering required; shaders target SPIR-V for vulkan1.
 **D-020 Simulation start.** Every simulation entry point (editor play, `sim.run`, Lua tests, runtime scene load,
 replays) calls `World::BeginSimulation(seed)`: RNG reseeded from the scene seed, tick and time zeroed, events
 cleared — so a scene played from the editor and the same scene loaded from disk produce identical hashes.
+
+**D-037 MikkTSpace (T08).** `ThirdParty/mikktspace` (zlib, pinned `master` commit) generates the tangents of meshes
+that have none (glTF requires MikkTSpace). Tangents are `xyz` + bitangent sign in `w`, bitangent =
+`sign * cross(normal, tangent)` pointing up the image: MikkTSpace sees `v' = 1 - v` because glTF's V runs down (the same
+result as three.js's sign flip). Vertices whose corners get different tangents are split.
+
+**D-038 Sub-assets (T08).** An asset file may contain assets (a glTF file is a `Model` whose meshes, materials and
+textures are sub-assets). Each sub-asset has a key unique in its file (`Mesh/<name>`, `Material/<name>`,
+`Texture/<name>`, `#<index>` for missing or shared names, `Texture/<name> (Linear)` for an image used both as color and
+as data) and a handle of its own, listed in the file's `.meta` under `SubAssets`, so re-imports keep references. A scan
+registers the listed sub-assets (the registry records `Parent` and `SubAssetKey`); an import that produces new keys adds
+them to the `.meta`; keys that disappear stay listed (a sub-asset that comes back keeps its handle). A listed handle that
+another asset has (another file or its sub-asset, the file itself, a built-in) is not registered (scan,
+`RegisterFile`), and the next import gives its key a new handle and rewrites the `.meta`, so a model never refers to
+another asset. `RegisterFile` registers the sub-assets an existing `.meta` lists, like a scan. Loading a sub-asset loads
+its file; a sub-asset has no import settings of its own. `.glb`/`.gltf` files are `Model` assets (not `Mesh`).
+
+**D-039 Built-in assets (T08).** Assets the engine provides without files have fixed small handles and the path
+`builtin:<name>`: the MeshFactory primitives `0x101`.. (Cube, Sphere, Plane, Capsule, Cylinder, Cone, Torus, Quad),
+the default textures `0x201`.. (White, Black, FlatNormal, Checker) and the default material `0x301`. Modules register
+them in `RegisterEngineAssets`; they win over a project asset that claims the same handle, which a scan reports as a
+`DuplicateHandle` and leaves unregistered (`RegisterFile` refuses it) until `AssignNewHandle` gives it its own.
+
+**D-044 Renderer conventions (T08).** Reversed depth (D32, near 1, far 0, `Greater` tests) with GLM's zero-to-one
+projections; meshes are counter-clockwise seen from outside (glTF), mirrored transforms flip the front face. Physical
+light units: directional lights in lux, point and spot lights in lumens (candela = lumens / 4 pi for both), exposure
+from EV100 (`1 / (1.2 * 2^EV100)`) applied to every luminance before shading (pre-exposed `RGBA16F` scene color), so
+emissive colors are luminances too. A depth prepass feeds a forward pass that tests `GreaterOrEqual` against it
+(identical, `invariant` positions); at most 256 lights per view in a structured buffer. The renderer reads only a
+`RenderScene`, extracted in `PreRender` with previous and current tick transforms and simulated times, interpolated with
+`alpha` (the shaders' `Time` is `RenderScene::GetTime(alpha)`). Each `RenderView` has a `ViewId` (a scene camera's is
+its entity UUID): view targets, and later per-view temporal state, are kept per id. A `MeshRenderer`'s `SubmeshIndex`
+and `MaterialOverrides` apply to `Mesh` assets; a `Model` draws its meshes with their own materials and ignores them,
+with a warning, until model-level overrides are defined. GPU copies (`RenderResources`) hold their assets, so
+`UnloadUnused` keeps what is drawn, and are released after `IdleFramesBeforeRelease` renders without use.
+
+**D-045 glTF import scope (T08).** Supported (also when required): `KHR_mesh_quantization`, `KHR_texture_transform`,
+`KHR_materials_emissive_strength`, `KHR_lights_punctual`; a file that requires another extension is refused, other used
+extensions are ignored. A material has one UV transform (`UVTiling`/`UVOffset`, taken from the first textured slot's
+`KHR_texture_transform`, rotation unsupported) and samples every texture with `TEXCOORD_0`; both limits are warnings on
+import. Points and lines are skipped; skins, animations and morph targets arrive with T14.

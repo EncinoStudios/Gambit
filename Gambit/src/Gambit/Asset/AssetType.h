@@ -30,7 +30,8 @@ namespace Gambit
 		DataTable,
 		AnimationClip,
 		Skeleton,
-		InputActions
+		InputActions,
+		Model // a glTF file: a node hierarchy whose meshes, materials and textures are sub-assets
 	};
 
 	// "Texture", "DataTable", ...; "None" for AssetType::None.
@@ -40,9 +41,9 @@ namespace Gambit
 
 	// The type of the asset file at `path` (a project-relative path or just a file name), from its name: the
 	// extension, compared without regard to case (".gscene" Scene, ".gprefab" Prefab, ".png" ".jpg" ".jpeg" ".tga"
-	// ".bmp" Texture, ".hdr" Environment, ".glb" ".gltf" Mesh, ".gmat" Material, ".lua" Script, ".wav" ".ogg" ".mp3"
+	// ".bmp" Texture, ".hdr" Environment, ".glb" ".gltf" Model, ".gmat" Material, ".lua" Script, ".wav" ".ogg" ".mp3"
 	// ".flac" Audio, ".ttf" ".otf" Font, ".svg" VectorGraphic, ".csv" DataTable) and the file name "InputActions.json".
-	// AnimationClip and Skeleton assets are produced by mesh imports and have no files of their own. Everything else,
-	// including ".meta" files, is AssetType::None.
+	// Meshes, AnimationClip and Skeleton assets are sub-assets of models (or built into the engine) and have no files
+	// of their own. Everything else, including ".meta" files, is AssetType::None.
 	[[nodiscard]] AssetType DetectAssetType(std::string_view path) noexcept;
 }

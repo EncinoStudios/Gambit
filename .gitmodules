@@ -60,6 +60,10 @@
 	path = ThirdParty/lz4
 	url = https://github.com/lz4/lz4
 	shallow = true
+[submodule "ThirdParty/mikktspace"]
+	path = ThirdParty/mikktspace
+	url = https://github.com/mmikk/MikkTSpace
+	shallow = true
 [submodule "ThirdParty/miniaudio"]
 	path = ThirdParty/miniaudio
 	url = https://github.com/mackron/miniaudio

@@ -137,21 +137,83 @@ does not break references:
 }
 ```
 
-`ImportSettings` belong to the importer of the type. Commit the `.meta` files together with the assets. A scan of the
+`ImportSettings` belong to the importer of the type (textures: the reflected struct `TextureImportSettings`,
+`{ "Srgb": true, "GenerateMips": true, "Filter": "Linear", "WrapU": "Repeat", "WrapV": "Repeat" }`, `Filter` also
+`Nearest`, wraps also `ClampToEdge` and `MirroredRepeat`; missing members take these defaults). Files that contain
+assets (glTF models, D-038) list them with their handles, so that re-importing keeps references to them:
+
+```json
+{
+  "Version": 1,
+  "Handle": "0x00000000000A0001",
+  "Type": "Model",
+  "ImportSettings": {},
+  "SubAssets": [
+    { "Key": "Texture/Bark", "Type": "Texture", "Handle": "0x00000000000A0002" },
+    { "Key": "Material/Bark", "Type": "Material", "Handle": "0x00000000000A0003" },
+    { "Key": "Mesh/Trunk", "Type": "Mesh", "Handle": "0x00000000000A0004" }
+  ]
+}
+```
+
+The import adds the keys it sees for the first time; keys are never removed, so a mesh that disappears from the file and
+comes back gets its old handle. Keys and handles are unique. A listed handle that another asset has (a `.meta` file
+merged from another one, or a built-in handle) is not registered by the scan, and the next import gives its key a new
+handle and rewrites the `.meta` file, with a warning. Commit the `.meta` files together with the assets. A scan of the
 project (`AssetManager::Scan`) finds every file whose name says it is an asset (`DetectAssetType`: `.gscene` `.gprefab`
-`.png` `.jpg` `.hdr` `.glb` `.gltf` `.gmat` `.lua` `.wav` `.ogg` `.ttf` `.svg` `.csv`, and `InputActions.json`) below the
+`.png` `.jpg` `.tga` `.bmp` (textures), `.hdr` (environments), `.glb` `.gltf` (models), `.gmat` `.lua` `.wav` `.ogg`
+`.ttf` `.svg` `.csv`, and `InputActions.json`) below the
 asset directories (`Assets`, `Scenes`, `Data`, `Scripts`) and creates the `.meta` file of the ones that have none. It
 warns about:
 
 - **duplicate handles** (a file copied together with its `.meta`): the file that had the handle before the scan keeps
   it (on the first scan, the first file in path order), the other is not registered until it gets a new one
-  (`AssetManager::AssignNewHandle`); nothing is rewritten on its own;
+  (`AssetManager::AssignNewHandle`); nothing is rewritten on its own. Built-in handles (D-039) always win: a project
+  asset that claims one is reported the same way;
 - **orphaned** `.meta` files whose asset is gone (never deleted);
 - **unreadable** `.meta` files (the asset is not registered and the file is not touched);
 - a `.meta` file without a handle (a new one is assigned and the settings are kept) or with another type than the file
   name says (the file name wins);
 - asset files whose names are not portable project paths (a backslash, `:`, a reserved device name such as `aux.png`):
   they are not registered and get no `.meta` file until they are renamed.
+
+## `.gmat`
+
+A material (D-025): the reflected struct `Material` after `"Version"` (`Renderer/Material.h`):
+
+```json
+{
+  "Version": 1,
+  "BaseColor": [1.0, 1.0, 1.0, 1.0],
+  "BaseColorTexture": "0x00000000000A0002",
+  "Metallic": 0.0,
+  "Roughness": 0.5,
+  "MetallicRoughnessTexture": "0x0000000000000000",
+  "NormalTexture": "0x0000000000000000",
+  "NormalScale": 1.0,
+  "OcclusionTexture": "0x0000000000000000",
+  "OcclusionStrength": 1.0,
+  "EmissiveColor": [0.0, 0.0, 0.0],
+  "EmissiveTexture": "0x0000000000000000",
+  "EmissiveStrength": 1.0,
+  "AlphaMode": "Opaque",
+  "AlphaCutoff": 0.5,
+  "DoubleSided": false,
+  "UVTiling": [1.0, 1.0],
+  "UVOffset": [0.0, 0.0]
+}
+```
+
+Colors are linear; textures are handles (base color and emissive textures hold sRGB colors, the others data:
+roughness in green and metallic in blue, a tangent-space normal map, occlusion in red). `AlphaMode` is `Opaque`, `Mask`
+or `Blend`; every texture uses `UV * UVTiling + UVOffset`. Values must be finite.
+
+## glTF models (`.gltf`, `.glb`)
+
+glTF 2.0 files are read as they are (no conversion step); `.gltf` files may use external buffers and images next to them
+or base64 data URIs, `.glb` files embedded ones. The file is a `Model` asset; its meshes, materials and textures are
+sub-assets keyed by their glTF names (D-038), meshes with one submesh per triangle primitive. Extensions: see D-045.
+Generate test files with `tools/gen_test_gltf.py`.
 
 ## CSV data tables
 

@@ -1,7 +1,8 @@
 # Third-party dependencies (D-003). Sources are pinned git submodules and are never edited (AGENTS.md section 7);
 # patches and configuration live here. Every target below builds with warnings disabled.
 #
-# Wired now: glm, doctest, nlohmann_json, EnTT, glfw, xxhash, lz4, monocypher, stb, Vulkan-Headers, NVRHI, glslang.
+# Wired now: glm, doctest, nlohmann_json, EnTT, glfw, xxhash, lz4, monocypher, stb, cgltf, mikktspace, Vulkan-Headers,
+# NVRHI, glslang.
 # The remaining submodules (see ThirdParty/README.md) are wired by the task that first needs them.
 
 set(GB_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -44,6 +45,18 @@ gambit_header_only_library(gb_stb stb::stb stb "." stb_image.h)
 # All engine IO goes through the VFS (D-014): images are decoded from and encoded to memory, never via stdio. The engine
 # compiles the single implementation translation unit (Gambit/src/Gambit/RHI/Internal/StbImage.cpp).
 target_compile_definitions(gb_stb INTERFACE STBI_NO_STDIO STBI_WRITE_NO_STDIO)
+
+# cgltf: header-only glTF 2.0 parser. The engine compiles the implementation once (Renderer/Internal/Cgltf.cpp) and
+# hands it files read through the VFS (D-014), never paths to open.
+gambit_header_only_library(gb_cgltf cgltf::cgltf cgltf "." cgltf.h)
+
+# MikkTSpace: the reference tangent space generator (zlib) that normal maps baked by DCC tools assume (glTF requires it
+# for meshes without tangents). A single C file.
+gambit_require_submodule(mikktspace mikktspace.c)
+add_library(gb_mikktspace STATIC "${GB_THIRDPARTY_DIR}/mikktspace/mikktspace.c")
+target_include_directories(gb_mikktspace SYSTEM PUBLIC "${GB_THIRDPARTY_DIR}/mikktspace")
+gambit_silence_warnings(gb_mikktspace)
+add_library(mikktspace::mikktspace ALIAS gb_mikktspace)
 
 # GLFW: static, no examples/tests/docs, no install rules. The engine talks to Vulkan, never OpenGL.
 gambit_require_submodule(glfw CMakeLists.txt)

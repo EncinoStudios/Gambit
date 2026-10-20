@@ -434,18 +434,18 @@ namespace Gambit
 
 		Result<StructValue> MergeStruct(
 			const StructInfo& info, const StructValue& current, const Json& json, std::string_view path,
-			LoadReport& report);
+			LoadReport& report, MergeAccess access);
 
 		Result<FieldValue> MergeValue(
 			const FieldInfo& field, const FieldValue& current, const Json& json, std::string_view path,
-			LoadReport& report)
+			LoadReport& report, MergeAccess access)
 		{
 			if (field.Type == FieldType::Struct)
 			{
 				const StructInfo& info = *field.Attributes.Struct;
 				const auto* base = std::get_if<StructValue>(&current);
 				Result<StructValue> merged =
-					MergeStruct(info, base != nullptr ? *base : info.GetDefault(), json, path, report);
+					MergeStruct(info, base != nullptr ? *base : info.GetDefault(), json, path, report, access);
 				if (!merged)
 				{
 					return merged.GetError();
@@ -467,7 +467,7 @@ namespace Gambit
 					const StructValue& start =
 						base != nullptr && index < base->size() ? (*base)[index] : info.GetDefault();
 					Result<StructValue> merged =
-						MergeStruct(info, start, json[index], JsonPathAppend(path, index), report);
+						MergeStruct(info, start, json[index], JsonPathAppend(path, index), report, access);
 					if (!merged)
 					{
 						return merged.GetError();
@@ -481,7 +481,7 @@ namespace Gambit
 
 		Result<StructValue> MergeStruct(
 			const StructInfo& info, const StructValue& current, const Json& json, std::string_view path,
-			LoadReport& report)
+			LoadReport& report, MergeAccess access)
 		{
 			if (!json.is_object())
 			{
@@ -504,10 +504,16 @@ namespace Gambit
 					continue;
 				}
 				const size_t index = static_cast<size_t>(field - fields.begin());
-				Result<FieldValue> merged = MergeValue(*field, value.Values[index], member, memberPath, report);
+				Result<FieldValue> merged = MergeValue(*field, value.Values[index], member, memberPath, report, access);
 				if (!merged)
 				{
 					return merged.GetError();
+				}
+				// Repeating the value a read-only member has is fine: component.get output can be given back.
+				if (access == MergeAccess::Tool && field->HasFlag(FieldFlags::ReadOnly)
+				    && *merged != value.Values[index])
+				{
+					return MakePathError(memberPath, std::format("the field '{}' is read-only", field->Name));
 				}
 				value.Values[index] = std::move(*merged);
 			}
@@ -589,15 +595,10 @@ namespace Gambit
 	}
 
 	Result<FieldValue> FieldValueMergeFromJson(
-		const FieldInfo& field, const FieldValue& current, const Json& json, std::string_view path, LoadReport& report)
+		const FieldInfo& field, const FieldValue& current, const Json& json, std::string_view path, LoadReport& report,
+		MergeAccess access)
 	{
-		return MergeValue(field, current, json, path, report);
-	}
-
-	Result<StructValue> StructValueMergeFromJson(
-		const StructInfo& info, const StructValue& current, const Json& json, std::string_view path, LoadReport& report)
-	{
-		return MergeStruct(info, current, json, path, report);
+		return MergeValue(field, current, json, path, report, access);
 	}
 
 	Result<Json> StructValueToJson(const StructInfo& info, const StructValue& value, std::string_view path)

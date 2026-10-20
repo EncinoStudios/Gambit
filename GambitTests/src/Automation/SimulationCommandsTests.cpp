@@ -35,6 +35,73 @@ namespace
 		return world.GetScheduler().AddSystem(CreateScope<JitterSystem>());
 	}
 
+	// Draws from the random generator and queues a spawn when it is created, as script and physics systems may:
+	// both are part of the run only if the simulation was started before the systems were added (D-020).
+	class StartupSystem final : public ISystem
+	{
+	public:
+		std::string_view GetName() const override { return "StartupSystem"; }
+		SystemPhase GetPhase() const override { return SystemPhase::Update; }
+
+		void OnCreate(World& world) override
+		{
+			static_cast<void>(world.GetRandom().NextU32());
+			static_cast<void>(world.GetCommandBuffer().CreateEntity("Spawned"));
+		}
+
+		void OnUpdate(World&, TimeStep) override {}
+	};
+
+	Result<void> AddJitterAndStartup(World& world)
+	{
+		if (Result<void> added = AddJitter(world); !added)
+		{
+			return added;
+		}
+		return world.GetScheduler().AddSystem(CreateScope<StartupSystem>());
+	}
+
+	std::string Hex(uint64_t hash)
+	{
+		return std::format("0x{:016X}", hash);
+	}
+
+	std::vector<std::string> Tick(World& world, int ticks)
+	{
+		std::vector<std::string> hashes;
+		for (int tick = 0; tick < ticks; ++tick)
+		{
+			world.Tick(TimeStep(1.0f / 60.0f));
+			hashes.push_back(Hex(world.ComputeStateHash()));
+		}
+		return hashes;
+	}
+
+	// The hashes of the saved scene loaded from its file and run the way the runtime does: load (which starts the
+	// world like BeginSimulation), add the systems, tick.
+	std::vector<std::string> RunFromFile(AutomationFixture& fixture, const EditorContext::WorldSetup& setup, int ticks)
+	{
+		World loaded(fixture.Types);
+		LoadReport report;
+		REQUIRE(SceneSerializer::Load(loaded, fixture.Context.GetProject()->GetVFS(), "Scenes/Main.gscene", report)
+		            .HasValue());
+		loaded.BeginSimulation(loaded.GetSeed());
+		REQUIRE(loaded.GetScheduler().AddSystem(CreateScope<TransformSystem>()).HasValue());
+		REQUIRE(setup(loaded).HasValue());
+		return Tick(loaded, ticks);
+	}
+
+	// What an editing session leaves in the edited world that a scene file does not store: a used random
+	// generator and a pending command.
+	void DisturbLikeAnEditor(World& world)
+	{
+		for (int draw = 0; draw < 5; ++draw)
+		{
+			static_cast<void>(world.GetRandom().NextU32());
+		}
+		static_cast<void>(world.GetCommandBuffer().CreateEntity("Pending"));
+	}
+
 	// A project with three units that jitter once a simulation runs.
 	struct Arena
 	{
@@ -93,27 +160,71 @@ TEST_CASE("Automation: sim.run simulates a copy of the scene and reports the sta
 
 TEST_CASE("Automation: sim.run of an edited scene gives the hashes of the scene loaded from its file")
 {
-	// D-020: entities created while editing consumed random numbers from the world, a file stores only the seed.
+	// D-020: a file stores only the seed, not what editing did to the world's random generator or command buffer.
 	Arena arena;
 	AutomationFixture& fixture = arena.Fixture;
-	const std::vector<std::string> played = arena.RunHashes(60);
 	fixture.Succeed("scene.save");
+	const std::vector<std::string> fromFile = RunFromFile(fixture, AddJitter, 60);
+	CHECK(fromFile.front() != fromFile.back());
 
-	World loaded(fixture.Types);
-	LoadReport report;
-	REQUIRE(
-		SceneSerializer::Load(loaded, fixture.Context.GetProject()->GetVFS(), "Scenes/Main.gscene", report).HasValue());
-	REQUIRE(loaded.GetScheduler().AddSystem(CreateScope<TransformSystem>()).HasValue());
-	REQUIRE(AddJitter(loaded).HasValue());
-	loaded.BeginSimulation(loaded.GetSeed());
-	std::vector<std::string> fromFile;
-	for (int tick = 0; tick < 60; ++tick)
-	{
-		loaded.Tick(TimeStep(1.0f / 60.0f));
-		fromFile.push_back(std::format("0x{:016X}", loaded.ComputeStateHash()));
-	}
-	CHECK(played == fromFile);
-	CHECK(played.front() != played.back());
+	DisturbLikeAnEditor(fixture.Scene());
+	CHECK(arena.RunHashes(60) == fromFile);
+
+	// The entry point of editor play is the same.
+	Result<Scope<World>> played = fixture.Context.CreateSimulationWorld(fixture.Scene());
+	REQUIRE(played.HasValue());
+	CHECK(Tick(**played, 60) == fromFile);
+	CHECK((*played)->FindEntityByName("Pending").IsValid() == false);
+}
+
+TEST_CASE("Automation: sim.run and editor play start the simulation before the systems are created")
+{
+	Arena arena;
+	AutomationFixture& fixture = arena.Fixture;
+	fixture.Context.SetSimulationSetup(AddJitterAndStartup);
+	fixture.Succeed("scene.save");
+	const std::vector<std::string> fromFile = RunFromFile(fixture, AddJitterAndStartup, 30);
+
+	const Json run = fixture.Succeed("sim.run", J(R"({"ticks": 30, "hashes": true})"));
+	CHECK(run.at("hashes").get<std::vector<std::string>>() == fromFile);
+	CHECK(run.at("entityCount") == 4); // what StartupSystem queued in OnCreate is part of the run
+
+	Result<Scope<World>> played = fixture.Context.CreateSimulationWorld(fixture.Scene());
+	REQUIRE(played.HasValue());
+	CHECK(Tick(**played, 30) == fromFile);
+
+	// A seed of its own for sim.run starts the same way, from that seed.
+	Result<Scope<World>> reseeded = fixture.Context.CreateSimulationWorld(fixture.Scene(), 4242);
+	REQUIRE(reseeded.HasValue());
+	CHECK((*reseeded)->GetSeed() == 4242);
+	const std::vector<std::string> reseededHashes = Tick(**reseeded, 30);
+	const Json runReseeded = fixture.Succeed("sim.run", J(R"({"ticks": 30, "hashes": true, "seed": 4242})"));
+	CHECK(runReseeded.at("hashes").get<std::vector<std::string>>() == reseededHashes);
+	CHECK(reseededHashes != fromFile);
+}
+
+TEST_CASE("Automation: seeds use the whole 64-bit range")
+{
+	Arena arena;
+	AutomationFixture& fixture = arena.Fixture;
+	constexpr uint64_t Large = (uint64_t(1) << 63) + 1;
+	const Json run = fixture.Succeed("sim.run", Json{ { "ticks", 3 }, { "seed", Large } });
+	CHECK(run.at("seed").get<uint64_t>() == Large);
+	// A seed a result reported can be given back.
+	CHECK(
+		fixture.Succeed("sim.run", Json{ { "ticks", 3 }, { "seed", run.at("seed") } }).at("stateHash")
+		== run.at("stateHash"));
+	const Json biggest = fixture.Succeed("sim.run", Json{ { "ticks", 1 }, { "seed", UINT64_MAX } });
+	CHECK(biggest.at("seed").get<uint64_t>() == UINT64_MAX);
+
+	const Json created = fixture.Succeed("scene.new", Json{ { "path", "Scenes/Large.gscene" }, { "seed", Large } });
+	CHECK(created.at("seed").get<uint64_t>() == Large);
+	CHECK(fixture.Scene().GetSeed() == Large);
+
+	// Beyond the range the message says so.
+	const CommandResult tooLarge = fixture.Reject(
+		"sim.run", J(R"({"ticks": 1, "seed": 18446744073709551616})"), CommandErrorCode::InvalidArguments);
+	CHECK(tooLarge.Message.find("out of range") != std::string::npos);
 }
 
 TEST_CASE("Automation: sim.run dumps components and honours the simulation rate and setup")

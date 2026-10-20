@@ -404,6 +404,7 @@ namespace Gambit
 		m_Time = 0.0;
 		m_DeltaTime = 0.0f;
 		ClearEvents();
+		m_CommandBuffer.Clear(); // a scene file stores no pending commands either
 	}
 
 	void World::ClearEvents() noexcept

@@ -30,21 +30,24 @@ namespace Gambit
 		// Appends the documents (project-relative paths) this operation changes.
 		virtual void GetDocuments(std::vector<std::string>& documents) const = 0;
 
-		// Absorbs `later`, the operation done right after this one, when both are the same kind of edit of the same
-		// target (a gizmo drag sets the same transform every frame). Returns true when this operation now stands for
-		// both; `later` is then dropped. Only asked for operations that were pushed with the same merge key.
-		[[nodiscard]] virtual bool TryMerge(const IUndoableOperation& later)
+		// Whether this operation can absorb `later`, the operation done right after it: both are the same kind of edit
+		// of the same target (a gizmo drag sets the same transform every frame). Only asked for operations that were
+		// pushed with the same merge key. Changes nothing, so that a group can check all its children first.
+		[[nodiscard]] virtual bool CanMerge(const IUndoableOperation& later) const
 		{
 			static_cast<void>(later);
 			return false;
 		}
+		// Absorbs `later` (CanMerge said yes): this operation now stands for both, and `later` is dropped.
+		virtual void Merge(const IUndoableOperation& later) { static_cast<void>(later); }
 	};
 
 	// The undo and redo history of a project's documents (D-050): operations are done through the stack, which keeps
 	// them for Undo and Redo. Features:
 	//  - groups (BeginGroup/EndGroup): everything done while a group is open becomes one entry;
 	//  - merging: consecutive operations pushed with the same non-empty merge key are merged if the operations agree
-	//    (IUndoableOperation::TryMerge); never across a save, an undo or a redo;
+	//    (IUndoableOperation::CanMerge); never across a save, an undo or a redo. A group whose operations all have
+	//    the same key gets that key, and merges with the next such group child by child (a drag of several entities);
 	//  - dirty tracking per document: a document is dirty when its state differs from the state it was saved in, and
 	//    becomes clean again when its operations are undone back to that state.
 	// The history is bounded: the oldest entries are dropped beyond MaxDepth. Not thread safe.
@@ -81,8 +84,9 @@ namespace Gambit
 
 		// ---- Groups ----
 
-		// Groups nest; the entry that ends up on the stack carries the description of the outermost group. A group with
-		// one operation is recorded as that operation (so merging still works); an empty one is dropped.
+		// Groups nest. A group with exactly one entry becomes that entry, its description and merge key included (so
+		// merging still works); an empty one is dropped; otherwise the group is recorded as one entry with its own
+		// description. So the entry on the stack is named by the innermost group that holds several entries.
 		void BeginGroup(std::string description);
 		void EndGroup();
 		// Undoes what the innermost open group did and drops the group (a command failed half way).

@@ -47,16 +47,16 @@ namespace
 		std::string GetDescription() const override { return m_Description; }
 		void GetDocuments(std::vector<std::string>& documents) const override { documents.push_back(m_Document); }
 
-		bool TryMerge(const IUndoableOperation& later) override
+		bool CanMerge(const IUndoableOperation& later) const override
 		{
 			const auto* next = dynamic_cast<const AddOperation*>(&later);
-			if (next == nullptr || next->m_Document != m_Document)
-			{
-				return false;
-			}
-			m_Amount += next->m_Amount;
+			return next != nullptr && next->m_Document == m_Document;
+		}
+
+		void Merge(const IUndoableOperation& later) override
+		{
+			m_Amount += static_cast<const AddOperation&>(later).m_Amount;
 			m_Description = "add " + std::to_string(m_Amount);
-			return true;
 		}
 
 		bool FailUndo = false;
@@ -82,7 +82,7 @@ namespace
 	};
 }
 
-TEST_CASE("Undo: operations are done, undone and redone in order")
+TEST_CASE("Automation: undo stack: operations are done, undone and redone in order")
 {
 	Harness h;
 	CHECK_FALSE(h.Stack.CanUndo());
@@ -113,7 +113,7 @@ TEST_CASE("Undo: operations are done, undone and redone in order")
 	CHECK(h.Stack.GetUndoHistory() == std::vector<std::string>{ "add 1000", "add 10", "add 1" });
 }
 
-TEST_CASE("Undo: an operation that fails is not recorded")
+TEST_CASE("Automation: undo stack: an operation that fails is not recorded")
 {
 	Harness h;
 	auto refusing = CreateScope<AddOperation>(h.Counter, 5);
@@ -125,7 +125,7 @@ TEST_CASE("Undo: an operation that fails is not recorded")
 	CHECK(h.Stack.GetDirtyDocuments().empty());
 }
 
-TEST_CASE("Undo: a group is one step")
+TEST_CASE("Automation: undo stack: a group is one step")
 {
 	Harness h;
 	REQUIRE(h.Add(1).HasValue());
@@ -148,7 +148,7 @@ TEST_CASE("Undo: a group is one step")
 	CHECK(h.Counter == 61);
 }
 
-TEST_CASE("Undo: groups nest, empty groups vanish and a group with one operation is that operation")
+TEST_CASE("Automation: undo stack: groups nest, empty groups vanish and a group with one operation is that operation")
 {
 	Harness h;
 	h.Stack.BeginGroup("empty");
@@ -175,7 +175,7 @@ TEST_CASE("Undo: groups nest, empty groups vanish and a group with one operation
 	CHECK(h.Counter == 13);
 }
 
-TEST_CASE("Undo: cancelling a group undoes what it did")
+TEST_CASE("Automation: undo stack: cancelling a group undoes what it did")
 {
 	Harness h;
 	REQUIRE(h.Add(1).HasValue());
@@ -190,7 +190,7 @@ TEST_CASE("Undo: cancelling a group undoes what it did")
 	CHECK_FALSE(h.Stack.CancelGroup(h.Context).HasValue()); // no group is open
 }
 
-TEST_CASE("Undo: operations with the same merge key merge, others do not")
+TEST_CASE("Automation: undo stack: operations with the same merge key merge, others do not")
 {
 	Harness h;
 	REQUIRE(h.Add(1, "drag").HasValue());
@@ -217,7 +217,7 @@ TEST_CASE("Undo: operations with the same merge key merge, others do not")
 	CHECK(h.Counter == 0);
 }
 
-TEST_CASE("Undo: operations on different documents do not merge, a save ends a merge")
+TEST_CASE("Automation: undo stack: operations on different documents do not merge, a save ends a merge")
 {
 	Harness h;
 	REQUIRE(h.Add(1, "drag", "A.gscene").HasValue());
@@ -233,7 +233,48 @@ TEST_CASE("Undo: operations on different documents do not merge, a save ends a m
 	CHECK_FALSE(h.Stack.IsDirty("A.gscene")); // back at the saved state
 }
 
-TEST_CASE("Undo: documents are dirty when they differ from the saved state")
+TEST_CASE("Automation: undo stack: groups whose operations share a merge key merge child by child")
+{
+	// A drag of several selected entities: every frame is a group with one edit per entity.
+	Harness h;
+	const auto group = [&](std::string description, std::initializer_list<std::pair<int, std::string>> edits,
+	                       std::string_view key = "drag") {
+		h.Stack.BeginGroup(std::move(description));
+		for (const auto& [amount, document] : edits)
+		{
+			REQUIRE(h.Add(amount, key, document).HasValue());
+		}
+		h.Stack.EndGroup();
+	};
+	group("move two", { { 1, "A.gscene" }, { 10, "B.gscene" } });
+	group("move two", { { 2, "A.gscene" }, { 20, "B.gscene" } });
+	group("move two", { { 3, "A.gscene" }, { 30, "B.gscene" } });
+	CHECK(h.Counter == 66);
+	CHECK(h.Stack.GetUndoHistory() == std::vector<std::string>{ "move two" });
+	REQUIRE(h.Stack.Undo(h.Context).HasValue());
+	CHECK(h.Counter == 0);
+	REQUIRE(h.Stack.Redo(h.Context).HasValue());
+	CHECK(h.Counter == 66);
+
+	// Other shapes stay steps of their own: one operation, operations without the key, other documents in order.
+	group("move one", { { 1, "A.gscene" } });
+	CHECK(h.Stack.GetUndoHistory().size() == 2);
+	h.Stack.BeginGroup("mixed");
+	REQUIRE(h.Add(1, "drag", "A.gscene").HasValue());
+	REQUIRE(h.Add(1, {}, "B.gscene").HasValue());
+	h.Stack.EndGroup();
+	CHECK(h.Stack.GetUndoHistory().size() == 3);
+	group("move two", { { 1, "A.gscene" }, { 1, "B.gscene" } });
+	group("move two", { { 1, "A.gscene" }, { 1, "B.gscene" } });
+	CHECK(h.Stack.GetUndoHistory().size() == 4);
+	group("swapped", { { 1, "B.gscene" }, { 1, "A.gscene" } });
+	CHECK(h.Stack.GetUndoHistory().size() == 5);
+	group("another key", { { 1, "A.gscene" }, { 1, "B.gscene" } }, "rotate");
+	CHECK(h.Stack.GetUndoHistory().size() == 6);
+	CHECK(h.Counter == 66 + 1 + 2 + 2 + 2 + 2 + 2);
+}
+
+TEST_CASE("Automation: undo stack: documents are dirty when they differ from the saved state")
 {
 	Harness h;
 	CHECK_FALSE(h.Stack.IsDirty("A.gscene"));
@@ -261,7 +302,7 @@ TEST_CASE("Undo: documents are dirty when they differ from the saved state")
 	CHECK_FALSE(h.Stack.IsDirty("A.gscene"));
 }
 
-TEST_CASE("Undo: a saved state that was discarded can never be reached again")
+TEST_CASE("Automation: undo stack: a saved state that was discarded can never be reached again")
 {
 	Harness h;
 	REQUIRE(h.Add(1).HasValue());
@@ -280,7 +321,7 @@ TEST_CASE("Undo: a saved state that was discarded can never be reached again")
 	CHECK_FALSE(h.Stack.IsDirty("A.gscene"));
 }
 
-TEST_CASE("Undo: new documents are dirty until saved")
+TEST_CASE("Automation: undo stack: new documents are dirty until saved")
 {
 	Harness h;
 	h.Stack.MarkDirty("New.gscene");
@@ -292,7 +333,7 @@ TEST_CASE("Undo: new documents are dirty until saved")
 	CHECK_FALSE(h.Stack.IsDirty("New.gscene"));
 }
 
-TEST_CASE("Undo: the history is bounded and the dirty state stays right")
+TEST_CASE("Automation: undo stack: the history is bounded and the dirty state stays right")
 {
 	EditorContext context;
 	int counter = 0;
@@ -332,7 +373,7 @@ TEST_CASE("Undo: the history is bounded and the dirty state stays right")
 	CHECK(tiny.GetMaxDepth() == 1);
 }
 
-TEST_CASE("Undo: discarding a document drops its operations")
+TEST_CASE("Automation: undo stack: discarding a document drops its operations")
 {
 	Harness h;
 	REQUIRE(h.Add(1, {}, "A.gscene").HasValue());
@@ -348,7 +389,7 @@ TEST_CASE("Undo: discarding a document drops its operations")
 	h.Stack.DiscardDocument("Never.gscene"); // unknown documents are fine
 }
 
-TEST_CASE("Undo: discarding a document makes the other documents of its groups dirty")
+TEST_CASE("Automation: undo stack: discarding a document makes the other documents of its groups dirty")
 {
 	Harness h;
 	REQUIRE(h.Add(1, {}, "B.gscene").HasValue());
@@ -364,7 +405,7 @@ TEST_CASE("Undo: discarding a document makes the other documents of its groups d
 	CHECK(h.Stack.IsDirty("B.gscene")); // the group changed B too and is gone from the history
 }
 
-TEST_CASE("Undo: a failing undo clears the history and keeps the documents dirty")
+TEST_CASE("Automation: undo stack: a failing undo clears the history and keeps the documents dirty")
 {
 	ScopedLogCapture log;
 	Harness h;
@@ -383,7 +424,7 @@ TEST_CASE("Undo: a failing undo clears the history and keeps the documents dirty
 	CHECK(log.Contains(LogLevel::Error, "undo refused"));
 }
 
-TEST_CASE("Undo: a failing redo clears the history too")
+TEST_CASE("Automation: undo stack: a failing redo clears the history too")
 {
 	ScopedLogCapture log;
 	Harness h;
@@ -402,7 +443,7 @@ TEST_CASE("Undo: a failing redo clears the history too")
 	CHECK_FALSE(h.Stack.CanUndo());
 }
 
-TEST_CASE("Undo: Clear keeps dirty documents dirty, Reset forgets everything")
+TEST_CASE("Automation: undo stack: Clear keeps dirty documents dirty, Reset forgets everything")
 {
 	Harness h;
 	REQUIRE(h.Add(1, {}, "A.gscene").HasValue());

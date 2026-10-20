@@ -170,25 +170,54 @@ namespace Gambit::Commands
 			{
 				return Fail(AddSource(source, content.GetError()));
 			}
+			// An open scene or table of the file would keep the old content (and saving it would undo the import).
+			Result<bool> closed = context.CloseReplacedDocument(*resolved);
+			if (!closed)
+			{
+				return Fail(closed.GetError());
+			}
 			if (Result<void> written = vfs.Write(*resolved, content->View()); !written)
 			{
 				return Fail(AddSource(*resolved, written.GetError()));
 			}
 
 			AssetManager& assets = context.GetProject()->GetAssets();
-			Json settings = Has(arguments, "importSettings") ? arguments.at("importSettings") : Json::object();
-			Result<AssetHandle> handle = assets.RegisterFile(*resolved, std::move(settings));
+			const Json settings = Has(arguments, "importSettings") ? arguments.at("importSettings") : Json::object();
+			Result<AssetHandle> handle = assets.RegisterFile(*resolved, settings); // a known file keeps its .meta
 			if (!handle)
 			{
 				return Fail(AddSource(*resolved, handle.GetError()));
 			}
 			assets.UnloadAsset(*handle); // an overwritten file must be read again
+			// A replaced file keeps its handle (so references stay valid) and its settings unless new ones are given.
+			Result<AssetMetadata> metadata = assets.ReadMetadata(*handle);
+			if (!metadata)
+			{
+				return Fail(AddSource(*resolved, metadata.GetError()));
+			}
+			if (Has(arguments, "importSettings") && metadata->ImportSettings != settings)
+			{
+				if (Result<void> set = assets.SetImportSettings(*handle, settings); !set)
+				{
+					return Fail(AddSource(*resolved, set.GetError()));
+				}
+				metadata->ImportSettings = settings;
+			}
 			Json data = Json::object();
 			data["handle"] = handle->ToString();
 			data["path"] = *resolved;
 			data["type"] = std::string(ToString(DetectAssetType(*resolved)));
 			data["size"] = content->Size();
-			return CommandResult::Success(std::move(data), std::format("Imported {} as '{}'", source, *resolved));
+			data["importSettings"] = std::move(metadata->ImportSettings);
+			CommandResult result =
+				CommandResult::Success(std::move(data), std::format("Imported {} as '{}'", source, *resolved));
+			if (*closed)
+			{
+				result.Warnings.push_back(std::format(
+					"'{}' was open; it was closed because its file was replaced (open it again for the new content)",
+					*resolved));
+			}
+			return result;
 		}
 
 		// ---- Prefabs ----
@@ -354,14 +383,16 @@ namespace Gambit::Commands
 				.Summary = "Copy a file into the project and make it an asset",
 				.Description =
 					"Writes the file and its .meta file, which gives the asset its handle. The kind of asset "
-					"follows from the file name.",
+					"follows from the file name. Replacing a file (overwrite) keeps its handle, and its import "
+					"settings unless importSettings is given; an open scene or table of the file is closed, or the "
+					"import refused when it has unsaved changes.",
 				.Arguments = { StringArg("source", "Path of the file on disk").Require(),
 		                       StringArg(
 								   "path",
 								   "Project path of the copy below an asset directory (default: Assets/<file name>)"),
 		                       ObjectArg("importSettings", "Settings for the importer of the asset type"),
 		                       BooleanArg("overwrite", "Replace a file that exists").WithDefault(false) },
-				.ResultDescription = "{ handle, path, type, size }",
+				.ResultDescription = "{ handle, path, type, size, importSettings }",
 				.Flags = CommandFlags::Mutating | CommandFlags::RequiresProject | CommandFlags::WritesFiles,
 			},
 			AssetImport);

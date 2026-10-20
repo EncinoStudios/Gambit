@@ -39,18 +39,25 @@ namespace Gambit
 	[[nodiscard]] Result<FieldValue>
 	FieldValueFromJson(const FieldInfo& field, const Json& json, std::string_view path, LoadReport& report);
 
+	// Who a merge edits for. Tools (component.set, bulk.set, the inspector) may not change struct members marked
+	// FieldFlags::ReadOnly, though they may repeat their current value; code (script table assignment) may change them.
+	enum class MergeAccess : uint8_t
+	{
+		Tool,
+		Code
+	};
+
 	// Like FieldValueFromJson, but for editing: a struct given as an object (or elements of an array of structs given
 	// as objects) change only the members the object names, the others keep their values from `current`; nested structs
 	// merge the same way. Element i of an array of structs merges into element i of the current array, elements beyond
 	// it start from the struct's defaults, and the result has as many elements as `json`. Everything else (scalars,
 	// vectors, arrays of other types) is replaced as a whole, exactly as FieldValueFromJson reads it. Unknown members
-	// of struct objects are warnings in `report`. This is the rule of component.set, bulk.set and script table
-	// assignment.
+	// of struct objects are warnings in `report`; with MergeAccess::Tool a read-only member that would change is an
+	// error naming its pointer. This is the rule of component.set, bulk.set and script table assignment. (The flags of
+	// `field` itself are the caller's business.)
 	[[nodiscard]] Result<FieldValue> FieldValueMergeFromJson(
-		const FieldInfo& field, const FieldValue& current, const Json& json, std::string_view path, LoadReport& report);
-	[[nodiscard]] Result<StructValue> StructValueMergeFromJson(
-		const StructInfo& info, const StructValue& current, const Json& json, std::string_view path,
-		LoadReport& report);
+		const FieldInfo& field, const FieldValue& current, const Json& json, std::string_view path, LoadReport& report,
+		MergeAccess access);
 
 	// A struct value as an object with a member for each serialized field, in field order.
 	[[nodiscard]] Result<Json>

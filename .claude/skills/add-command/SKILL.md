@@ -55,7 +55,7 @@ struct-merging values), `DescribeEntity`, `Fail(code, message)`.
   `SubtreeOperation::Create/Destroy`, `ComponentPresenceOperation`, `ReparentOperation`, `SetCellOperation`,
   `TableRowOperation` (`Automation/UndoOperations.h`). They work from reflection and snapshots, so a new component or
   field needs nothing. Write a new `IUndoableOperation` only for a change none of them can express: `Redo` performs it and
-  records what `Undo` needs on first use, `GetDocuments` names the scene or table path, `TryMerge` is optional.
+  records what `Undo` needs on first use, `GetDocuments` names the scene or table path, `CanMerge`/`Merge` are optional.
 - The registry wraps every `Undoable` command in an undo group and rolls it back if the handler fails, so several
   operations are one step and a failure leaves the scene as it was. Check everything you can *before* the first `Do`.
 - Never touch `Internal` components directly (generic reflection refuses); use `World` calls (`SetParent`, `SetEnabled`,

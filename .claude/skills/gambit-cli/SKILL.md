@@ -12,7 +12,7 @@ binary is `build/<Config>/bin/gambit` (see the build-and-test skill).
 ## Discover, do not guess
 
 ```sh
-gambit commands                      # the 48 commands, one line each (add a prefix: gambit commands entity.)
+gambit commands                      # the 49 commands, one line each (add a prefix: gambit commands entity.)
 gambit help entity create            # arguments, types, defaults, result, flags
 gambit commands --json               # all schemas (what MCP tools are made from)
 gambit component types --json        # every component: fields, types, defaults, ranges, enum values (scripts' too)
@@ -43,8 +43,13 @@ gambit sim run --ticks 120 --components Transform    # headless; deterministic s
   lists of structs. Vectors are replaced whole (`"Translation": [0, 1, 0]`). Enums are value names (`"Fast"`), references and
   asset handles `"0x..."`.
 - **Many edits at once**: `bulk get --component Health` returns a table (rows = entities), edit it, `bulk set --component
-  Health --table '<json>'` applies it as one undo step; `bulk export-csv` / `bulk import-csv` do the same through a
-  spreadsheet. Data tables (`Data/*.csv`): `data get`, `data set`, `data add-row`, `data remove-row`.
+  Health --table '<json>'` applies it as one undo step; `bulk export-csv` (CSV text) or `bulk write-csv --path
+  Exports/Health.csv` (a file; `--overwrite` to replace one) and `bulk import-csv` do the same through a spreadsheet. Data
+  tables (`Data/*.csv`): `data get`, `data set`, `data add-row`, `data remove-row`.
+- **Warnings matter.** A scene that holds components or fields this build does not know (a script component whose script
+  is not loaded, data from a newer engine) loads with warnings, and saving it would delete that data: the save then fails
+  with `conflict` and says what would be lost. Do not force it with `scene save --discard-unknown` unless losing that data
+  is really intended; ask (leave a comment) when in doubt.
 - **Several steps that belong together** (create a hierarchy, use selection or undo between steps) go in a batch: one JSON
   command per line, one session, all-or-nothing save:
 

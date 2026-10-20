@@ -301,7 +301,7 @@ TEST_CASE("Automation: entity.duplicate copies a subtree next to the original")
 {
 	AutomationFixture fixture;
 	fixture.CreateProject();
-	fixture.Create("Other");
+	const std::string other = fixture.Create("Other");
 	const std::string root = fixture.Create("Root", J(R"({"components": {"Health": {"Current": 7}}})"));
 	const std::string child = fixture.Create("Child", J(R"({"parent": "Root"})"));
 	fixture.Create("Last");
@@ -309,10 +309,7 @@ TEST_CASE("Automation: entity.duplicate copies a subtree next to the original")
 	fixture.Succeed(
 		"component.add",
 		J(R"({"entity": ")" + child + R"(", "component": "AllTypes", "values": {"Target": ")" + root
-	      + R"(", "Targets": []}})"));
-	fixture.Succeed(
-		"component.set",
-		J(R"({"entity": ")" + child + R"(", "component": "AllTypes", "values": {"Target": ")" + root + R"("}})"));
+	      + R"(", "Targets": [")" + other + R"("]}})"));
 	REQUIRE(Shape(fixture.Scene()) == "Other Root[Child] Last");
 
 	Json copy;
@@ -331,6 +328,7 @@ TEST_CASE("Automation: entity.duplicate copies a subtree next to the original")
 	const Entity copiedChild = world.GetChildren(copied).front();
 	CHECK(copiedChild.GetUUID() != UUID::Parse(child).value());
 	CHECK(copiedChild.GetComponent<AllTypesComponent>().Target == copied.GetUUID()); // follows the copy
+	CHECK(copiedChild.GetComponent<AllTypesComponent>().Targets == std::vector<UUID>{ *UUID::Parse(other) }); // stays
 	CHECK(world.FindEntityByName("Root").GetUUID() == UUID::Parse(root).value());
 
 	// Without a name the copy has the original's name.
@@ -455,9 +453,14 @@ TEST_CASE("Automation: entity.find searches by name, component and field value")
 	CHECK(find(R"({"component": "Health", "limit": 1})").at("count") == 1);
 	CHECK(find(R"({"component": "Health", "limit": 1})").at("total") == 3);
 	CHECK(find(R"({"component": "AllTypes"})").at("total") == 0);
-	CHECK(
-		find(R"({"component": "Transform", "field": "Translation", "equals": [0, 0, 0]})").at("total")
-		== 0); // none has a transform
+	// Array values compare element by element.
+	fixture.Create("Origin", J(R"({"components": {"Transform": {"Translation": [0, 0, 0]}}})"));
+	fixture.Create("Moved", J(R"({"components": {"Transform": {"Translation": [0, 0, 1]}}})"));
+	const Json origin = find(R"({"component": "Transform", "field": "Translation", "equals": [0, 0, 0]})");
+	REQUIRE(origin.at("total") == 1);
+	CHECK(origin.at("entities")[0].at("name") == "Origin");
+	CHECK(find(R"({"component": "Transform", "field": "Translation", "equals": [0, 0, 1.0]})").at("total") == 1);
+	CHECK(find(R"({"component": "Transform", "field": "Translation", "equals": [0, 0]})").at("total") == 0);
 
 	fixture.Reject("entity.find", J(R"({})"), CommandErrorCode::InvalidArguments);
 	fixture.Reject("entity.find", J(R"({"field": "Current", "equals": 1})"), CommandErrorCode::InvalidArguments);

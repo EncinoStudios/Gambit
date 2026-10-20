@@ -34,6 +34,23 @@ namespace Gambit
 			const size_t dot = name.find_last_of('.');
 			return std::string(dot == std::string_view::npos || dot == 0 ? name : name.substr(0, dot));
 		}
+
+		// The warnings of a load as "<source><pointer>: <message>" lines.
+		std::vector<std::string> DescribeWarnings(std::string_view source, const LoadReport& report)
+		{
+			std::vector<std::string> lines;
+			for (const Diagnostic& warning : report.GetWarnings())
+			{
+				lines.push_back(std::format("{}{}: {}", source, warning.Path, warning.Message));
+			}
+			if (report.GetSuppressedCount() > 0)
+			{
+				lines.push_back(std::format("... and {} more warnings", report.GetSuppressedCount()));
+			}
+			return lines;
+		}
+
+		constexpr size_t MaxListedDrops = 3;
 	}
 
 	Result<std::string> NormalizeProjectPath(std::string_view path)
@@ -112,6 +129,7 @@ namespace Gambit
 		m_ActiveScene = nullptr;
 		m_Selection.clear();
 		m_Scenes.clear();
+		m_Tables.clear();
 		m_Undo.Reset();
 		m_Comments.reset();
 		m_Project.reset();
@@ -204,6 +222,7 @@ namespace Gambit
 			return metadata.GetError();
 		}
 		document->Metadata = std::move(*metadata);
+		document->DroppedOnLoad = DescribeWarnings(document->Path, report);
 		m_Scenes.push_back(std::move(document));
 		return m_Scenes.back().get();
 	}
@@ -264,6 +283,39 @@ namespace Gambit
 		return {};
 	}
 
+	Result<bool> EditorContext::CloseReplacedDocument(std::string_view path)
+	{
+		const Result<std::string> normalized = NormalizeProjectPath(path);
+		if (!normalized)
+		{
+			return normalized.GetError();
+		}
+		SceneDocument* scene = FindScene(*normalized);
+		const bool tableOpen = IsTableOpen(*normalized);
+		if (scene == nullptr && !tableOpen)
+		{
+			return false;
+		}
+		if (m_Undo.IsDirty(*normalized))
+		{
+			return MakeCommandError(
+				CommandErrorCode::Conflict,
+				std::format(
+					"'{}' is open with unsaved changes, which replacing its file would lose: save or close it first",
+					*normalized));
+		}
+		if (scene != nullptr)
+		{
+			RemoveScene(scene);
+		}
+		else
+		{
+			m_Tables.erase(*normalized);
+			m_Undo.DiscardDocument(*normalized);
+		}
+		return true;
+	}
+
 	void EditorContext::RemoveScene(SceneDocument* scene)
 	{
 		const std::string path = scene->Path;
@@ -301,12 +353,24 @@ namespace Gambit
 			return MakeCommandError(
 				CommandErrorCode::NotFound, std::format("there is no data table '{}' (data.tables lists them)", path));
 		}
+		if (const auto open = m_Tables.find(record->Path); open != m_Tables.end())
+		{
+			return open->second;
+		}
 		Result<Ref<Asset>> asset = assets.LoadAsset(record->Handle);
 		if (!asset)
 		{
 			return asset.GetError();
 		}
-		return std::static_pointer_cast<DataTable>(*asset);
+		Ref<DataTable> table = std::static_pointer_cast<DataTable>(*asset);
+		m_Tables.emplace(record->Path, table);
+		return table;
+	}
+
+	bool EditorContext::IsTableOpen(std::string_view path) const
+	{
+		const Result<std::string> normalized = NormalizeProjectPath(path);
+		return normalized && m_Tables.contains(*normalized);
 	}
 
 	Result<void> EditorContext::RegisterSaved(std::string_view path)
@@ -324,7 +388,7 @@ namespace Gambit
 		return {};
 	}
 
-	Result<void> EditorContext::SaveScene(SceneDocument& scene)
+	Result<void> EditorContext::SaveScene(SceneDocument& scene, bool discardUnknown)
 	{
 		if (m_DryRun)
 		{
@@ -333,6 +397,24 @@ namespace Gambit
 		if (m_Project == nullptr)
 		{
 			return MakeCommandError(CommandErrorCode::NoProject, "no project is open");
+		}
+		if (!scene.DroppedOnLoad.empty() && !discardUnknown)
+		{
+			std::string dropped;
+			for (size_t index = 0; index < scene.DroppedOnLoad.size() && index < MaxListedDrops; ++index)
+			{
+				dropped += (index == 0 ? "" : "; ") + scene.DroppedOnLoad[index];
+			}
+			if (scene.DroppedOnLoad.size() > MaxListedDrops)
+			{
+				dropped += std::format("; {} more", scene.DroppedOnLoad.size() - MaxListedDrops);
+			}
+			return MakeCommandError(
+				CommandErrorCode::Conflict,
+				std::format(
+					"'{}' was opened without data this build cannot read ({}); saving it would delete that data from "
+					"the file. Register the missing types, or save with scene.save --discard-unknown to drop it",
+					scene.Path, dropped));
 		}
 		if (Result<void> saved = SceneSerializer::Save(*scene.Scene, scene.Metadata, m_Project->GetVFS(), scene.Path);
 		    !saved)
@@ -343,15 +425,16 @@ namespace Gambit
 		{
 			return registered;
 		}
+		scene.DroppedOnLoad.clear(); // the file now holds what the world holds
 		m_Undo.MarkClean(scene.Path);
 		return {};
 	}
 
-	Result<void> EditorContext::SaveDocument(std::string_view document)
+	Result<void> EditorContext::SaveDocument(std::string_view document, bool discardUnknown)
 	{
 		if (SceneDocument* scene = FindScene(document); scene != nullptr)
 		{
-			return SaveScene(*scene);
+			return SaveScene(*scene, discardUnknown);
 		}
 		if (m_DryRun)
 		{
@@ -370,12 +453,12 @@ namespace Gambit
 		return {};
 	}
 
-	Result<std::vector<std::string>> EditorContext::SaveAll()
+	Result<std::vector<std::string>> EditorContext::SaveAll(bool discardUnknown)
 	{
 		std::vector<std::string> saved;
 		for (const std::string& document : m_Undo.GetDirtyDocuments())
 		{
-			if (Result<void> result = SaveDocument(document); !result)
+			if (Result<void> result = SaveDocument(document, discardUnknown); !result)
 			{
 				return AddSource(document, result.GetError());
 			}
@@ -430,10 +513,11 @@ namespace Gambit
 		return m_LogBuffer != nullptr ? m_LogBuffer : Log::GetRingBuffer();
 	}
 
-	Result<Scope<World>> EditorContext::CreateSimulationWorld(const World& scene) const
+	Result<Scope<World>> EditorContext::CreateSimulationWorld(const World& scene, std::optional<uint64_t> seed) const
 	{
 		Scope<World> world = World::Copy(scene);
-		world->BeginSimulation(scene.GetSeed());
+		// Before any system exists: a loaded scene, too, is started before its systems are created (D-020).
+		world->BeginSimulation(seed.value_or(scene.GetSeed()));
 		if (Result<void> added = world->GetScheduler().AddSystem(CreateScope<TransformSystem>()); !added)
 		{
 			return added.GetError();

@@ -18,10 +18,12 @@ namespace Gambit::Tests
 	{
 		bool Started = false;  // false: the program could not be started (StartError says why)
 		bool TimedOut = false; // killed after the timeout
-		int ExitCode = -1;     // the exit code; 128 + signal number when the process was killed by a signal
+		int ExitCode = -1;     // the exit code; 128 + signal number when the process was killed by a signal; -1 when
+		                       // it is unknown (WaitError says why)
 		std::string Output;    // standard output
 		std::string Errors;    // standard error
 		std::string StartError;
+		std::string WaitError; // the status of the started process could not be read
 	};
 
 	// Runs a program to completion and captures its output, for tests of the real binaries (`gambit`). No shell is

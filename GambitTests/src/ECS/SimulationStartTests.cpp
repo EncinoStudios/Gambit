@@ -116,12 +116,17 @@ TEST_CASE("ECS: playing a copy of an edited scene gives the hashes of the scene 
 	TestWorld fromFile;
 	LoadReport report;
 	REQUIRE(SceneSerializer::Load(*fromFile.Scene, directory.GetVFS(), "Scenes/Arena.gscene", report).HasValue());
-	AddSystems(*fromFile.Scene);
 	fromFile.Scene->BeginSimulation(fromFile.Scene->GetSeed());
+	AddSystems(*fromFile.Scene);
 
+	// Editing also leaves commands in the buffer (a host that queued some, a RunsInEditMode system): a file stores
+	// none.
+	static_cast<void>(edited.GetCommandBuffer().CreateEntity("Pending"));
 	Scope<World> played = World::Copy(edited);
-	AddSystems(*played);
+	REQUIRE(played->GetCommandBuffer().GetCommandCount() == 1); // copied with the world
 	played->BeginSimulation(edited.GetSeed());
+	CHECK(played->GetCommandBuffer().IsEmpty());
+	AddSystems(*played);
 
 	// Both start in the same state ...
 	REQUIRE(played->ComputeStateHash() == fromFile.Scene->ComputeStateHash());
@@ -131,83 +136,33 @@ TEST_CASE("ECS: playing a copy of an edited scene gives the hashes of the scene 
 	CHECK(playedHashes == loadedHashes);
 	CHECK(playedHashes.front() != playedHashes.back());
 
+	CHECK_FALSE(played->FindEntityByName("Pending").IsValid());
+
 	// The control: a copy that did not call BeginSimulation starts from the editing world's random generator state and
-	// diverges (the five CreateEntity calls consumed random numbers).
+	// diverges (the five CreateEntity calls consumed random numbers), and spawns what was pending.
 	Scope<World> careless = World::Copy(edited);
 	AddSystems(*careless);
 	careless->Tick(TimeStep(1.0f / 60.0f));
 	CHECK(careless->ComputeStateHash() != loadedHashes.front());
+	CHECK(careless->FindEntityByName("Pending").IsValid());
 }
 
-TEST_CASE("ECS: SetSiblingIndex moves children and roots")
+TEST_CASE("ECS: BeginSimulation drops pending commands and their reserved UUIDs")
 {
 	TestWorld fixture;
 	World& world = *fixture.Scene;
-	Entity parent = world.CreateEntityWithUUID(UUID(1), "Parent");
-	Entity a = world.CreateEntityWithUUID(UUID(2), "A");
-	Entity b = world.CreateEntityWithUUID(UUID(3), "B");
-	Entity c = world.CreateEntityWithUUID(UUID(4), "C");
-	Entity other = world.CreateEntityWithUUID(UUID(5), "Other");
-	for (Entity child : { a, b, c })
-	{
-		REQUIRE(world.SetParent(child, parent).HasValue());
-	}
-	const auto children = [&] {
-		std::string names;
-		for (const Entity child : world.GetChildren(parent))
-		{
-			names += child.GetName();
-		}
-		return names;
-	};
-	CHECK(children() == "ABC");
-	CHECK(world.GetSiblingIndex(a) == 0);
-	CHECK(world.GetSiblingIndex(c) == 2);
+	world.SetSeed(5);
+	const UUID pending = world.GetCommandBuffer().CreateEntity("Pending");
+	REQUIRE(world.GetCommandBuffer().GetCommandCount() == 1);
 
-	world.SetSiblingIndex(c, 0);
-	CHECK(children() == "CAB");
-	world.SetSiblingIndex(c, 1);
-	CHECK(children() == "ACB");
-	world.SetSiblingIndex(a, 99); // beyond the last position: to the end
-	CHECK(children() == "CBA");
-	CHECK(world.GetSiblingIndex(a) == 2);
-	world.SetSiblingIndex(b, 1); // already there
-	CHECK(children() == "CBA");
-
-	// Roots: Parent, Other.
-	const auto roots = [&] {
-		std::string names;
-		for (const Entity root : world.GetRoots())
-		{
-			names += root.GetName() + ",";
-		}
-		return names;
-	};
-	CHECK(roots() == "Parent,Other,");
-	world.SetSiblingIndex(other, 0);
-	CHECK(roots() == "Other,Parent,");
-	CHECK(world.GetSiblingIndex(other) == 0);
-	CHECK(world.GetSiblingIndex(parent) == 1);
-	world.SetSiblingIndex(other, 5);
-	CHECK(roots() == "Parent,Other,");
-
-	// Detaching and attaching still works after the roots were reordered.
-	REQUIRE(world.SetParent(other, parent).HasValue());
-	CHECK(roots() == "Parent,");
-	REQUIRE(world.SetParent(other, Entity()).HasValue());
-	CHECK(roots() == "Parent,Other,");
-
-	// Sibling order is part of the state hash of children.
-	TestWorld second;
-	World& twin = *second.Scene;
-	Entity twinParent = twin.CreateEntityWithUUID(parent.GetUUID(), "Parent");
-	for (const Entity child : world.GetChildren(parent))
-	{
-		Entity copy = twin.CreateEntityWithUUID(child.GetUUID(), child.GetName());
-		REQUIRE(twin.SetParent(copy, twinParent).HasValue());
-	}
-	REQUIRE(twin.CreateEntityWithUUID(other.GetUUID(), "Other").IsValid());
-	CHECK(twin.ComputeStateHash() == world.ComputeStateHash());
-	twin.SetSiblingIndex(twin.GetChildren(twinParent).front(), 2);
-	CHECK(twin.ComputeStateHash() != world.ComputeStateHash());
+	world.BeginSimulation(5);
+	CHECK(world.GetCommandBuffer().IsEmpty());
+	world.Tick(TimeStep(1.0f / 60.0f));
+	CHECK_FALSE(world.ContainsEntity(pending));
+	CHECK(world.GetEntityCount() == 0);
+	// The generator restarted, so the first new UUID is the one a fresh world with the seed draws first: the UUID the
+	// dropped command had reserved is free again.
+	TestWorld fresh;
+	fresh.Scene->SetSeed(5);
+	CHECK(world.CreateEntity("Next").GetUUID() == fresh.Scene->CreateEntity("Next").GetUUID());
 }

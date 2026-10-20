@@ -12,7 +12,7 @@ namespace Gambit
 	//   selection.get/set, undo, redo
 	//   asset.list/info/import, prefab.create/instantiate
 	//   data.tables/get/set/add-row/remove-row
-	//   bulk.get/set/export-csv/import-csv
+	//   bulk.get/set/export-csv/write-csv/import-csv
 	//   sim.run, log.read
 	//   comment.add/reply/resolve/reopen/list/get/delete
 	// Registering twice into the same registry is a programmer error (verified).

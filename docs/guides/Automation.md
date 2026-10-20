@@ -29,7 +29,7 @@ required arguments, wrong types, values outside an enum or range; whole floats s
 stands for "absent"), applies defaults, checks the flags' preconditions, runs the handler and returns a `CommandResult`:
 
 ```json
-{ "ok": true, "message": "Created entity 'Crate' (0x7FDD41A81634EFF3)", "data": { "uuid": "0x7FDD41A81634EFF3", "...": "..." }, "warnings": [] }
+{ "ok": true, "message": "Created entity 'Crate' (0x7FDD41A81634EFF3)", "data": { "uuid": "0x7FDD41A81634EFF3", "...": "..." } }
 { "ok": false, "error": { "code": "not-found", "message": "there is no entity named 'Crat' in the active scene (entity.list shows the entities)" } }
 ```
 
@@ -67,7 +67,8 @@ gambit help [<command>]
 - `<command>` is the dotted name or the same words with spaces: `gambit entity create --name Crate` is
   `gambit entity.create --name Crate`. Global options may stand anywhere.
 - `--project` names the project directory (it must hold exactly one `.gproject`) or the file; without it the project in the
-  current directory is used. The project's start scene is opened and made active; `--scene <path>` opens another one instead.
+  current directory is used (a `.gproject` there that cannot be read is an error). The project's start scene is opened and
+  made active; `--scene <path>` opens another one instead.
 - Arguments are options with the schema's names, camelCase or kebab-case (`--keep-world-transform`): `--name Crate`,
   `--name=Crate`, `--index 2`. Booleans stand alone (`--hashes`), take a value (`--hashes false`) or are negated
   (`--no-hashes`). Objects and arrays are JSON (`--components '{"Transform": {"Translation": [0, 1, 0]}}'`); an array of
@@ -77,10 +78,16 @@ gambit help [<command>]
   mind your shell's quoting of JSON; `--args` and `batch` files avoid the problem.
 - The command runs, and when it **succeeded** every scene and data table it changed is **saved** (`saved Scenes/Main.gscene`);
   a failed command saves nothing. `--dry-run` runs the command in memory and saves nothing; commands that write files right
-  away (`writes-files`: `project.new`, `scene.save`, `asset.import`, `prefab.create`, `bulk.export-csv --path`) refuse.
+  away (`writes-files`: `project.new`, `scene.save`, `asset.import`, `prefab.create`, `bulk.write-csv`) refuse.
   Comment commands work in memory in a dry run.
+- A scene that loaded with data this build cannot read (an unknown component, field or member: a script component whose
+  script is not loaded, a component from a newer engine) is **not saved over**: the save fails with `conflict` and names the
+  data, since the file would lose it. The load warnings come with every result (stderr, or `"warnings"` with `--json`).
+  `scene.save --discard-unknown` saves anyway and drops the data; to edit and save such a scene in one go, use a batch that
+  ends with `{"command": "scene.save", "args": {"discardUnknown": true}}`.
 - Output is a short summary (the result's message, then the data as `key: value` lines and tables), or with `--json` the
-  `CommandResult` document above (plus `"saved": [...]`). Warnings (unknown members in a loaded file) go to stderr.
+  `CommandResult` document above (plus `"saved": [...]`). Warnings (what a loaded file held that this build does not read)
+  go to stderr.
 - **Exit codes:** `0` ok, `1` the command failed (`not-found`, `conflict`, `failed`, ...; also a project or scene that cannot be
   opened), `2` usage error (unknown command, unknown option, an argument the schema rejects). With `--json` errors are
   printed as results on stdout and the exit code is the same.
@@ -103,22 +110,24 @@ It stops at the first failing line and then **saves nothing** (the batch happene
 files that `writes-files` commands wrote); `--keep-going` runs the remaining lines and saves what succeeded. The file `-` is
 standard input. Output is one line per command (`[2] entity.create: Created entity 'Arm' ...`) and a summary, or with `--json`
 one result per line (with `line` and `command`) and a final `{"summary": {...}}`. The exit code is the worst of the lines.
-A batch may start with `project.new` and no `--project`.
+A batch may start with `project.new` and no `--project`. Hosts run batches with `RunCommandBatch`
+(`Gambit/Automation/CommandBatch.h`) and read command lines with `ResolveCommand` and `ParseCommandOptions`
+(`Gambit/Automation/CommandLine.h`), so the editor console and its headless script mode read them exactly like the CLI.
 
 ## Commands by area
 
-48 commands; `gambit commands` lists them, `gambit help <name>` documents one.
+49 commands; `gambit commands` lists them, `gambit help <name>` documents one.
 
 | Area | Commands |
 |---|---|
 | Project | `project.new` (folders, `.gproject`, `InputActions.json`, an empty start scene which is opened), `project.info` |
-| Scenes | `scene.new` (in memory, written on save), `scene.open`, `scene.save` (`all`), `scene.close` (`discard`), `scene.list`, `scene.set-active` |
+| Scenes | `scene.new` (in memory, written on save), `scene.open`, `scene.save` (`all`, `discardUnknown`), `scene.close` (`discard`), `scene.list`, `scene.set-active` |
 | Entities | `entity.create` (name, parent, index, components with initial values), `entity.destroy`, `entity.rename`, `entity.reparent` (index, `keepWorldTransform`; cycles refused), `entity.duplicate`, `entity.list` (flat or tree; filter by name, component, parent; paged), `entity.get` (every component as in a scene file), `entity.find` (by name, component, or a field's value) |
 | Components | `component.add`, `component.remove`, `component.get`, `component.set` (partial values; `mergeKey` for drags), `component.types` |
 | Selection, history | `selection.get`, `selection.set` (replace, add, remove), `undo`, `redo` (`steps`) |
-| Assets | `asset.list`, `asset.info` (import settings, dependencies), `asset.import` (copies a file in and writes its `.meta`), `prefab.create`, `prefab.instantiate` |
+| Assets | `asset.list`, `asset.info` (import settings, dependencies), `asset.import` (copies a file in and writes its `.meta`; `overwrite` keeps the handle), `prefab.create`, `prefab.instantiate` |
 | Data tables | `data.tables`, `data.get` (table, row or cell), `data.set`, `data.add-row`, `data.remove-row` |
-| Bulk | `bulk.get`, `bulk.set`, `bulk.export-csv`, `bulk.import-csv` |
+| Bulk | `bulk.get`, `bulk.set` (`mergeKey` for drags of several entities), `bulk.export-csv` (text), `bulk.write-csv` (a file), `bulk.import-csv` |
 | Simulation, log | `sim.run`, `log.read` |
 | Comments | `comment.add`, `comment.reply`, `comment.resolve`, `comment.reopen`, `comment.list`, `comment.get`, `comment.delete` |
 
@@ -128,22 +137,28 @@ Notes on behaviour that is easy to get wrong:
   copied entities and keeps references to others.
 - Components the engine manages (`ID`, `Relationship`, `Inactive`, `WorldTransform`) cannot be added, removed or set, and
   only components that are removable can be removed (`Tag` cannot; `entity.rename` changes its `Name`). Read-only and
-  runtime-only fields cannot be set. Adding `Disabled` switches the entity and its children off (`entity.get` shows
+  runtime-only fields cannot be set, nor can read-only members of struct fields (repeating their current value is fine, so
+  what `component.get` returns can be given back). Adding `Disabled` switches the entity and its children off (`entity.get` shows
   `enabled` and `active`); removing it switches them on.
 - `scene.close` refuses unsaved changes unless `discard` is set. `scene.new` fails if the file or an open scene has the path.
 - `sim.run` simulates a **copy** of the active scene for `ticks` fixed ticks at the project's `SimulationHz`, headless, and
   returns the state hash (`stateHash`; with `hashes` the hash after every tick; with `components` a dump of those
   components). The copy starts exactly like the scene loaded from its file (`World::BeginSimulation`, D-020): same scene and
-  seed, same hashes, in any process.
+  seed, same hashes, in any process, and the same as editor play (both use `EditorContext::CreateSimulationWorld`). Seeds
+  are 64-bit unsigned integers (`seed` takes the whole range).
 - `log.read` returns the host's recent log messages (`level`, `contains`, `count`); pass the `lastSequence` of one call as
   `after` to read on.
 - `asset.import` and `prefab.create` write files at once and are not undoable; scene, component, entity and data-table edits
-  are undoable.
+  are undoable. Replacing a file (`overwrite`) keeps its handle, so references stay valid, and its import settings unless
+  `importSettings` is given. An open scene or data table of the replaced file is closed, so that it is read again from the
+  new file; when it has unsaved changes the command refuses with `conflict` instead (`bulk.write-csv` too).
 
 ## Undo and redo
 
 Every mutating command that changes a scene or a data table is **one undo step**, however many things it changed (`bulk.set`
-over 500 entities, `entity.destroy` of a subtree). Internally (`Automation/UndoStack.h`, `UndoOperations.h`) a step is an
+over 500 entities, `entity.destroy` of a subtree). Commands that write files (`asset.import`, `prefab.create`,
+`bulk.write-csv`, `scene.save`, `project.new`), change the session (`scene.new`, `scene.close`, `undo`, `redo`) or project
+data outside the documents (`comment.*`) are not undoable (D-054). Internally (`Automation/UndoStack.h`, `UndoOperations.h`) a step is an
 `IUndoableOperation` (`Redo`, `Undo`, `GetDescription`) built from reflection and snapshots, so new components and commands
 need no undo code:
 
@@ -156,7 +171,8 @@ need no undo code:
 
 `UndoStack` adds **groups** (`BeginGroup`/`EndGroup`; nesting; a group of one operation is that operation; the registry wraps
 each undoable command in one and rolls it back when the handler fails, so a failing command leaves the scene as it was),
-**merging**, a bounded history (1000 steps) and **dirty tracking per document**: a scene or table is dirty when it differs
+**merging** (also of whole groups whose operations share the key, child by child: `bulk.set --merge-key` over the same
+entities every frame), a bounded history (1000 steps) and **dirty tracking per document**: a scene or table is dirty when it differs
 from what was saved, and becomes clean again when undone to the saved state. Undo and redo bring back the exact state: the
 state hash after `undo` equals the one before the command. Operations name their document by project path, never by
 pointer, so closing and reopening scenes is safe.
@@ -196,15 +212,18 @@ D-027: one component type across all entities of a scene is a table, rows = enti
   column objects); rows hold `{entity, values}`. Everything is validated first (unknown entity, entity without the
   component, wrong types, read-only fields that would change), then applied as **one undo step**; cells that already hold
   their value change nothing.
-- `bulk.export-csv` writes RFC 4180 CSV for a spreadsheet (to the text of the result, or to a `.csv` file of the project with
-  `--path`): the first column `Entity` holds the UUIDs, `EntityName` the names (ignored on import); fields follow with a
+- `bulk.export-csv` returns RFC 4180 CSV for a spreadsheet as the `csv` text of the result (it changes nothing, so dry runs
+  and read-only hosts may use it); `bulk.write-csv --path Exports/Health.csv` writes the same text to a `.csv` file of the
+  project (an existing file only with `overwrite`; an open data table of the file with unsaved edits is a `conflict`). The
+  first column `Entity` holds the UUIDs, `EntityName` the names (ignored on import); fields follow with a
   type in the header (`Health:float`); vectors, colors and quaternions get one column per part (`Translation_X`,
   `Color_R`), structs and arrays one column of JSON text. `bulk.import-csv --csv <text>` or `--path` reads it back with the same
   rules as `bulk.set`; the columns may be any subset (a vector needs all of its parts). Exporting and importing the
   same data changes nothing.
 - Data tables (`Data/*.csv`, D-027) are separate: `data.tables`, `data.get`, `data.set --table Data/Weapons.csv --row pistol
   --column Damage --value 12.5` (JSON of the column's type, or text in CSV notation), `data.add-row`, `data.remove-row`. They
-  are saved with the scene edits and undoable.
+  are saved with the scene edits and undoable. A table that a command reads or edits stays open in the `EditorContext`
+  (`GetTable`) until it is closed, so a reload of the asset cannot replace a table with unsaved edits.
 
 ## Comments
 

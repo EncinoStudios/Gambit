@@ -164,14 +164,16 @@ namespace Gambit
 		return {};
 	}
 
-	bool SetFieldsOperation::TryMerge(const IUndoableOperation& later)
+	bool SetFieldsOperation::CanMerge(const IUndoableOperation& later) const
 	{
 		const auto* next = dynamic_cast<const SetFieldsOperation*>(&later);
-		if (next == nullptr || next->m_Document != m_Document || next->m_Entity != m_Entity
-		    || next->m_Component != m_Component)
-		{
-			return false;
-		}
+		return next != nullptr && next->m_Document == m_Document && next->m_Entity == m_Entity
+			&& next->m_Component == m_Component;
+	}
+
+	void SetFieldsOperation::Merge(const IUndoableOperation& later)
+	{
+		const auto* next = static_cast<const SetFieldsOperation*>(&later);
 		for (const FieldData& data : next->m_After)
 		{
 			const auto existing = std::ranges::find(m_After, data.Name, &FieldData::Name);
@@ -191,7 +193,6 @@ namespace Gambit
 				m_Before.push_back(data);
 			}
 		}
-		return true;
 	}
 
 	// ---- ComponentPresenceOperation ----

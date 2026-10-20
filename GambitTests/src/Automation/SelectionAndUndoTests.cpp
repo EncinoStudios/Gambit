@@ -124,7 +124,43 @@ TEST_CASE("Automation: the selection follows undo and redo")
 	CHECK(SelectedNames(fixture) == std::vector<std::string>{ "Keep" }); // a redone entity is not selected again
 }
 
-TEST_CASE("Automation: every undoable command is one step")
+TEST_CASE("Automation: a failed undo step still takes removed entities out of the selection")
+{
+	const ScopedLogCapture log;
+	AutomationFixture fixture;
+	fixture.CreateProject();
+	fixture.Create("Old");
+	fixture.Create("Fresh");
+	fixture.Succeed("selection.set", J(R"({"entities": ["Fresh"]})"));
+	// The scene changes behind the history's back, so undoing the creation of "Old" fails after "Fresh" is gone.
+	fixture.Scene().DestroyEntity(fixture.Scene().FindEntityByName("Old"));
+
+	const CommandResult failed = fixture.Reject("undo", J(R"({"steps": 2})"), CommandErrorCode::Conflict);
+	CHECK(failed.Message.find("the undo history was cleared") != std::string::npos);
+	CHECK(log.Contains(LogLevel::Error, "undo 'Create entity 'Old'' failed"));
+	CHECK_FALSE(fixture.Scene().FindEntityByName("Fresh").IsValid());
+	CHECK(fixture.Context.GetSelection().empty());
+	CHECK(fixture.Succeed("selection.get").at("count") == 0);
+	fixture.Create("Next");
+	fixture.Succeed("selection.set", J(R"({"entities": ["Next"], "mode": "add"})"));
+	CHECK(SelectedNames(fixture) == std::vector<std::string>{ "Next" });
+}
+
+TEST_CASE("Automation: selection.get names no entity for a selected UUID that is gone")
+{
+	AutomationFixture fixture;
+	fixture.CreateProject();
+	const std::string gone = fixture.Create("Gone");
+	fixture.Succeed("selection.set", J(R"({"entities": ["Gone"]})"));
+	// Only a host that removes entities without the commands can leave such an entry.
+	fixture.Scene().DestroyEntity(fixture.Scene().FindEntityByName("Gone"));
+	const Json selection = fixture.Succeed("selection.get");
+	REQUIRE(selection.at("count") == 1);
+	CHECK(selection.at("entities")[0].at("uuid") == gone);
+	CHECK(selection.at("entities")[0].at("name").is_null());
+}
+
+TEST_CASE("Automation: every undoable command has an undo test")
 {
 	AutomationFixture fixture;
 	// The commands that are tested for undo in this suite; a new undoable command must be added here and get a test.
@@ -147,10 +183,11 @@ TEST_CASE("Automation: every undoable command is one step")
 		}
 	}
 	CHECK(undoable == tested);
-	// Everything else that changes something writes a file or the host's state: those changes have no undo.
+	// Everything else that changes something writes a file, changes project data outside the documents (comments)
+	// or the session itself: those changes have no undo (D-054).
 	CHECK(
 		mutating
-		== std::set<std::string>{ "asset.import", "comment.add", "comment.delete", "comment.reopen", "comment.reply",
-	                              "comment.resolve", "prefab.create", "project.new", "redo", "scene.close", "scene.new",
-	                              "scene.save", "undo" });
+		== std::set<std::string>{ "asset.import", "bulk.write-csv", "comment.add", "comment.delete", "comment.reopen",
+	                              "comment.reply", "comment.resolve", "prefab.create", "project.new", "redo",
+	                              "scene.close", "scene.new", "scene.save", "undo" });
 }

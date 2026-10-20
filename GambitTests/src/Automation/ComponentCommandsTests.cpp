@@ -9,6 +9,28 @@ using namespace Gambit::Tests;
 
 namespace
 {
+	struct SealedStats
+	{
+		int32_t Level = 1;
+		int32_t Serial = 7; // read-only: tools show it, code writes it
+	};
+
+	struct SealedComponent
+	{
+		SealedStats Stats;
+		std::vector<SealedStats> History{ SealedStats{} };
+	};
+
+	void RegisterSealed(TypeRegistry& types)
+	{
+		types.RegisterStruct<SealedStats>("SealedStats")
+			.Field("Level", &SealedStats::Level)
+			.Field("Serial", &SealedStats::Serial, Attr::ReadOnly{});
+		types.RegisterComponent<SealedComponent>("Sealed")
+			.Field("Stats", &SealedComponent::Stats)
+			.Field("History", &SealedComponent::History);
+	}
+
 	struct Subject
 	{
 		AutomationFixture Fixture;
@@ -406,4 +428,56 @@ TEST_CASE("Automation: component.types describes every component the tools can e
 	CHECK(everything.at("count").get<size_t>() > types.at("count").get<size_t>());
 	CHECK(fixture.Succeed("component.types", J(R"({"name": "Relationship"})")).at("count") == 1);
 	fixture.Reject("component.types", J(R"({"name": "Nope"})"), CommandErrorCode::NotFound);
+}
+
+TEST_CASE("Automation: read-only members of structs cannot be changed by component.set, bulk.set or a CSV")
+{
+	AutomationFixture fixture;
+	RegisterSealed(fixture.Types);
+	fixture.CreateProject();
+	const std::string vault = fixture.Create("Vault", J(R"({"components": {"Sealed": {}}})"));
+	const uint64_t before = fixture.Hash();
+
+	const auto set = [&](std::string_view values) {
+		Json arguments = Json::object();
+		arguments["entity"] = vault;
+		arguments["component"] = "Sealed";
+		arguments["values"] = Json::parse(values);
+		return arguments;
+	};
+	CHECK(
+		fixture.Reject("component.set", set(R"({"Stats": {"Serial": 8}})"), CommandErrorCode::InvalidArguments).Message
+		== "/Sealed/Stats/Serial: the field 'Serial' is read-only");
+	CHECK(
+		fixture.Reject("component.set", set(R"({"History": [{"Serial": 9}]})"), CommandErrorCode::InvalidArguments)
+			.Message
+		== "/Sealed/History/0/Serial: the field 'Serial' is read-only");
+	fixture.Reject(
+		"entity.create", J(R"({"name": "Other", "components": {"Sealed": {"Stats": {"Serial": 1}}}})"),
+		CommandErrorCode::InvalidArguments);
+
+	Json table = Json::object();
+	table["columns"] = J(R"(["Stats"])");
+	table["rows"] = Json::array({ Json{ { "entity", vault }, { "values", J(R"([{"Serial": 3}])") } } });
+	CHECK(
+		fixture
+			.Reject(
+				"bulk.set", Json{ { "component", "Sealed" }, { "table", table } }, CommandErrorCode::InvalidArguments)
+			.Message.find("the field 'Serial' is read-only")
+		!= std::string::npos);
+	const std::string csv = "Entity,Stats:string\n" + vault + ",\"{\"\"Serial\"\": 3}\"\n";
+	fixture.Reject(
+		"bulk.import-csv", Json{ { "component", "Sealed" }, { "csv", csv } }, CommandErrorCode::InvalidArguments);
+	CHECK(fixture.Hash() == before);
+
+	// What component.get returns can be given back, and the other members change.
+	const Json values =
+		fixture.Succeed("component.get", J(R"({"entity": "Vault", "component": "Sealed"})")).at("values");
+	CHECK(fixture.Succeed("component.set", Json{ { "entity", vault }, { "component", "Sealed" }, { "values", values } })
+	          .at("changed")
+	          .empty());
+	fixture.Succeed("component.set", set(R"({"Stats": {"Level": 5, "Serial": 7}})"));
+	const Entity entity = fixture.Scene().FindEntityByName("Vault");
+	CHECK(entity.GetComponent<SealedComponent>().Stats.Level == 5);
+	CHECK(entity.GetComponent<SealedComponent>().Stats.Serial == 7);
 }

@@ -26,15 +26,14 @@ namespace Gambit::CommandSupport
 	[[nodiscard]] std::optional<std::string> TryGetString(const Json& arguments, std::string_view name);
 	[[nodiscard]] int64_t GetInteger(const Json& arguments, std::string_view name, int64_t fallback = 0);
 	[[nodiscard]] std::optional<int64_t> TryGetInteger(const Json& arguments, std::string_view name);
+	// An UnsignedArg argument.
+	[[nodiscard]] uint64_t GetUnsigned(const Json& arguments, std::string_view name, uint64_t fallback = 0);
 	[[nodiscard]] bool GetBool(const Json& arguments, std::string_view name, bool fallback = false);
 
 	// ---- Results ----
 
 	[[nodiscard]] CommandResult Fail(CommandErrorCode code, std::string message);
 	[[nodiscard]] CommandResult Fail(const Error& error, CommandErrorCode fallback = CommandErrorCode::Failed);
-	// Failure when `report` holds warnings: commands are strict about their input, so an unknown member in a value is
-	// an error and not a warning (the message names it).
-	[[nodiscard]] Result<void> RequireNoWarnings(const LoadReport& report);
 
 	// ---- Entities ----
 

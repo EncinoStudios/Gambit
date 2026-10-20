@@ -69,7 +69,7 @@ namespace
 	};
 }
 
-TEST_CASE("Comments: a thread is stored as one JSON file per thread")
+TEST_CASE("Project: comments: a thread is stored as one JSON file per thread")
 {
 	Fixture fixture;
 	const CommentThread thread = fixture.Add(EntityTarget(0xABC), "The crate is too big");
@@ -103,7 +103,7 @@ TEST_CASE("Comments: a thread is stored as one JSON file per thread")
 	CHECK(fixture.Store.Find("0xnope") == nullptr);
 }
 
-TEST_CASE("Comments: replies, resolving and reopening add messages and move the update time")
+TEST_CASE("Project: comments: replies, resolving and reopening add messages and move the update time")
 {
 	Fixture fixture;
 	const CommentThread thread = fixture.Add(FeatureTarget("inventory"), "Needs a design");
@@ -139,7 +139,7 @@ TEST_CASE("Comments: replies, resolving and reopening add messages and move the 
 	CHECK(fixture.Store.Find(thread.Id)->Messages.size() == 3);
 }
 
-TEST_CASE("Comments: threads survive a reload")
+TEST_CASE("Project: comments: threads survive a reload")
 {
 	Fixture fixture;
 	CommentTarget position;
@@ -196,7 +196,7 @@ TEST_CASE("Comments: threads survive a reload")
 	CHECK(none.GetCount() == 0);
 }
 
-TEST_CASE("Comments: threads are queried by target, status and author, oldest first")
+TEST_CASE("Project: comments: threads are queried by target, status and author, oldest first")
 {
 	Fixture fixture;
 	const CommentThread first = fixture.Add(EntityTarget(0x10), "one", "claude");
@@ -257,7 +257,7 @@ TEST_CASE("Comments: threads are queried by target, status and author, oldest fi
 	CHECK(fixture.Ids(query).empty());
 }
 
-TEST_CASE("Comments: deleting a thread removes its file")
+TEST_CASE("Project: comments: deleting a thread removes its file")
 {
 	Fixture fixture;
 	const CommentThread keep = fixture.Add(FeatureTarget("keep"));
@@ -272,7 +272,7 @@ TEST_CASE("Comments: deleting a thread removes its file")
 	CHECK_FALSE(fixture.Store.Delete(doomed.Id).HasValue());
 }
 
-TEST_CASE("Comments: invalid threads are refused")
+TEST_CASE("Project: comments: invalid threads are refused")
 {
 	Fixture fixture;
 	const auto refuses = [&](CommentTarget target, std::string_view author, std::string_view text) {
@@ -322,7 +322,7 @@ TEST_CASE("Comments: invalid threads are refused")
 	CHECK_FALSE(fixture.Directory.Exists("Comments"));
 }
 
-TEST_CASE("Comments: files that are not valid threads are reported and left alone")
+TEST_CASE("Project: comments: files that are not valid threads are reported and left alone")
 {
 	Fixture fixture;
 	const CommentThread good = fixture.Add(FeatureTarget("good"));
@@ -366,7 +366,7 @@ TEST_CASE("Comments: files that are not valid threads are reported and left alon
 	CHECK(fixture.Directory.ReadFile("Comments/0x0000000000000001.json") == "{ broken"); // untouched
 }
 
-TEST_CASE("Comments: a store without writes changes only memory")
+TEST_CASE("Project: comments: a store without writes changes only memory")
 {
 	Fixture fixture;
 	const CommentThread existing = fixture.Add(FeatureTarget("on disk"));
@@ -387,7 +387,7 @@ TEST_CASE("Comments: a store without writes changes only memory")
 	CHECK(fixture.Directory.Exists("Comments/" + preview.Id + ".json"));
 }
 
-TEST_CASE("Comments: names and timestamps")
+TEST_CASE("Project: comments: names and timestamps")
 {
 	CHECK(ToString(CommentTargetKind::Position) == "Position");
 	CHECK(ParseCommentTargetKind("Component") == CommentTargetKind::Component);

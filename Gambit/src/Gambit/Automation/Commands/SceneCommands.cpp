@@ -23,8 +23,7 @@ namespace Gambit::Commands
 
 		CommandResult SceneNew(EditorContext& context, const Json& arguments)
 		{
-			const uint64_t seed = Has(arguments, "seed") ? static_cast<uint64_t>(GetInteger(arguments, "seed"))
-														 : context.GetProject()->GetSettings().DefaultSeed;
+			const uint64_t seed = GetUnsigned(arguments, "seed", context.GetProject()->GetSettings().DefaultSeed);
 			Result<SceneDocument*> scene =
 				context.CreateScene(GetString(arguments, "path"), GetString(arguments, "name"), seed);
 			if (!scene)
@@ -66,23 +65,18 @@ namespace Gambit::Commands
 				std::format(
 					"{} scene '{}' ({} entities)", wasOpen ? "Scene already open:" : "Opened", (*scene)->Path,
 					(*scene)->Scene->GetEntityCount()));
-			for (const Diagnostic& warning : report.GetWarnings())
-			{
-				result.Warnings.push_back(std::format("{}{}: {}", (*scene)->Path, warning.Path, warning.Message));
-			}
-			if (report.GetSuppressedCount() > 0)
-			{
-				result.Warnings.push_back(std::format("... and {} more warnings", report.GetSuppressedCount()));
-			}
+			// Also for a scene that was open already: saving it still drops what its load left out.
+			result.Warnings = (*scene)->DroppedOnLoad;
 			return result;
 		}
 
 		CommandResult SceneSave(EditorContext& context, const Json& arguments)
 		{
+			const bool discardUnknown = GetBool(arguments, "discardUnknown", false);
 			Json saved = Json::array();
 			if (GetBool(arguments, "all", false))
 			{
-				Result<std::vector<std::string>> paths = context.SaveAll();
+				Result<std::vector<std::string>> paths = context.SaveAll(discardUnknown);
 				if (!paths)
 				{
 					return Fail(paths.GetError());
@@ -103,7 +97,7 @@ namespace Gambit::Commands
 						Has(arguments, "path") ? std::format("the scene '{}' is not open", GetString(arguments, "path"))
 											   : std::string("no scene is open"));
 				}
-				if (Result<void> result = context.SaveScene(*scene); !result)
+				if (Result<void> result = context.SaveScene(*scene, discardUnknown); !result)
 				{
 					return Fail(AddSource(scene->Path, result.GetError()));
 				}
@@ -196,9 +190,9 @@ namespace Gambit::Commands
 								   "Project-relative .gscene path below an asset directory, e.g. Scenes/Level1.gscene")
 		                           .Require(),
 		                       StringArg("name", "Display name stored in the file (default: the file name)"),
-		                       IntegerArg(
-								   "seed", "Seed of the scene's random generator (default: the project's default seed)")
-		                           .WithMinimum(0),
+		                       UnsignedArg(
+								   "seed",
+								   "Seed of the scene's random generator (default: the project's default seed)"),
 		                       BooleanArg("activate", "Make it the active scene").WithDefault(true) },
 				.ResultDescription = "{ path, name, seed, entityCount, active, dirty }",
 				.Flags = CommandFlags::Mutating | CommandFlags::RequiresProject,
@@ -213,7 +207,8 @@ namespace Gambit::Commands
 				.Arguments = { StringArg("path", "Project-relative .gscene path").Require(),
 		                       BooleanArg("activate", "Make it the active scene").WithDefault(true) },
 				.ResultDescription = "{ path, name, seed, entityCount, active, dirty, alreadyOpen }; warnings list "
-									 "unknown members of the file",
+									 "what the file contained that this build cannot read (scene.save then refuses "
+									 "unless discardUnknown)",
 				.Flags = CommandFlags::RequiresProject,
 			},
 			SceneOpen);
@@ -223,8 +218,15 @@ namespace Gambit::Commands
 			CommandInfo{
 				.Name = "scene.save",
 				.Summary = "Write a scene (or all scenes with changes) to its file",
+				.Description =
+					"A scene that was opened with data this build cannot read (unknown components or fields, listed "
+					"as warnings by scene.open) is refused, because the file would lose that data, unless "
+					"discardUnknown is true.",
 				.Arguments = { StringArg("path", "The open scene to save (default: the active scene)"),
-		                       BooleanArg("all", "Save every document with unsaved changes instead")
+		                       BooleanArg("all", "Save every document with unsaved changes instead").WithDefault(false),
+		                       BooleanArg(
+								   "discardUnknown",
+								   "Save even if the file then loses the data its load could not read")
 		                           .WithDefault(false) },
 				.ResultDescription = "{ saved: [paths] }",
 				.Flags = CommandFlags::Mutating | CommandFlags::RequiresProject | CommandFlags::WritesFiles,

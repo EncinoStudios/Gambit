@@ -91,6 +91,47 @@ TEST_CASE("Automation: arrays of enum strings check every element")
 	const Result<Json> bad = info.ParseArguments(J(R"({"modes": ["x", "z"]})"));
 	REQUIRE_FALSE(bad.HasValue());
 	CHECK(bad.GetError().Message == "argument 'modes[1]': 'z' is not one of: x, y");
+
+	// In the schema the enum restricts the elements: on the array itself no value could match it.
+	const Json property = info.GetInputSchema().at("properties").at("modes");
+	CHECK(
+		property == J(R"({"type": "array", "description": "Modes", "items": {"type": "string", "enum": ["x", "y"]}})"));
+}
+
+TEST_CASE("Automation: integer arguments are int64, unsigned ones take the whole uint64 range")
+{
+	CommandInfo info{ .Name = "a.b",
+		              .Summary = "s",
+		              .Arguments = { IntegerArg("count", "Count"), UnsignedArg("seed", "Seed") } };
+	REQUIRE(info.Validate().HasValue());
+	const auto message = [&](std::string_view json) {
+		const Result<Json> parsed = info.ParseArguments(J(json));
+		REQUIRE_FALSE(parsed.HasValue());
+		return parsed.GetError().Message;
+	};
+
+	const Result<Json> large = info.ParseArguments(J(R"({"seed": 9223372036854775809})")); // 2^63 + 1
+	REQUIRE(large.HasValue());
+	CHECK(large->at("seed").get<uint64_t>() == 9223372036854775809ULL);
+	const Result<Json> largest = info.ParseArguments(J(R"({"seed": 18446744073709551615, "count": -5})"));
+	REQUIRE(largest.HasValue());
+	CHECK(largest->at("seed").get<uint64_t>() == UINT64_MAX);
+	CHECK(largest->at("count").get<int64_t>() == -5);
+	CHECK(info.ParseArguments(J(R"({"seed": 0})")).HasValue());
+
+	CHECK(message(R"({"seed": -1})") == "argument 'seed': -1 is below the minimum 0");
+	CHECK(
+		message(R"({"seed": 18446744073709551616})")
+		== "argument 'seed': 18446744073709551616 is out of range (the maximum is 18446744073709551615)");
+	CHECK(
+		message(R"({"count": 9223372036854775808})")
+		== "argument 'count': 9223372036854775808 is out of range for a 64-bit integer");
+	CHECK(message(R"({"seed": 2.5})") == "argument 'seed': expected an integer, found a number");
+
+	const Json schema = info.GetInputSchema().at("properties").at("seed");
+	CHECK(schema.at("type") == "integer");
+	CHECK(schema.at("minimum") == 0.0);
+	CHECK(schema.at("maximum").get<double>() == MaxUnsignedArgument);
 }
 
 TEST_CASE("Automation: the input schema is a JSON Schema object")

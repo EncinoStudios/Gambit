@@ -86,10 +86,11 @@ Phases run in the order of D-024 (`Input` ... `Transform`, `PreRender`). `RunsIn
 - Change the hierarchy only with `World::SetParent`/`SetSiblingIndex`/`DestroyEntity`, the enabled state with
   `World::SetEnabled`. The order of children is simulation state (hashed); the order of roots is presentation only.
 - Start every simulation with `world.BeginSimulation(seed)` (D-020 "Simulation start"): it reseeds the random generator
-  from the scene's seed, zeroes the tick counter and the simulated time and drops the events of both buffers. A scene file
-  stores only the seed, but the world you edited may have used its generator, so a copy of an edited scene (editor play,
-  `sim.run`, Lua tests) behaves like the same scene loaded from its file only if it starts this way. Every simulation entry
-  point calls it before the first tick; `EditorContext::CreateSimulationWorld` does it for the tools.
+  from the scene's seed, zeroes the tick counter and the simulated time and drops the events of both buffers and the
+  pending commands. A scene file stores only the seed, but the world you edited may have used its generator, events and
+  command buffer, so a copy of an edited scene (editor play, `sim.run`, Lua tests) behaves like the same scene loaded from
+  its file only if it starts this way. Every simulation entry point calls it once, before it adds the systems and before
+  the first tick; `EditorContext::CreateSimulationWorld` does it for the tools.
 - Events are double-buffered (D-017): `world.Events<T>().Emit(...)`; `View()` is the previous tick's complete set
   (every system sees each event once, whatever its phase), `ViewCurrent()` this tick's so far. Events are copied and
   hashed, so each type needs `void HashEvent(Hasher&, const T&)` next to it (`HashEventFields(hasher, e.A, e.B)`).

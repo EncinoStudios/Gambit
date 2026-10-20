@@ -13,14 +13,9 @@ using namespace Gambit::Tests;
 
 namespace
 {
-	std::string ReadFile(const std::filesystem::path& path)
-	{
-		return ReadTextFile(path);
-	}
-
 	std::string ProjectFile(AutomationFixture& fixture, std::string_view relative)
 	{
-		return ReadFile(fixture.GetProjectDirectory() / std::string(relative));
+		return ReadTextFile(fixture.GetProjectDirectory() / std::string(relative));
 	}
 }
 
@@ -235,6 +230,48 @@ TEST_CASE("Automation: scene.open reports what the file contained that was ignor
 		<< R"({"Version": 1, "Entities": [{"UUID": "0x1"}, {"UUID": "0x1"}]})";
 	fixture.Reject("scene.open", J(R"({"path": "Scenes/Broken.gscene"})"), CommandErrorCode::Failed);
 	CHECK(fixture.Context.FindScene("Scenes/Broken.gscene") == nullptr);
+}
+
+TEST_CASE("Automation: a scene opened without some of its data is saved only when the loss is accepted")
+{
+	const ScopedLogCapture log;
+	AutomationFixture fixture;
+	fixture.CreateProject();
+	const std::string text =
+		R"({"Version": 1, "Name": "Odd", "Seed": 1, "Entities": [{"UUID": "0x1", "Components": {"Tag": {"Name": "A"}, "Ghost": {"Power": 9}}}]})";
+	std::ofstream(fixture.GetProjectDirectory() / "Scenes/Odd.gscene") << text;
+
+	const CommandResult opened = fixture.Run("scene.open", J(R"({"path": "Scenes/Odd.gscene"})"));
+	REQUIRE(opened.Ok);
+	REQUIRE(opened.Warnings.size() == 1);
+	CHECK(fixture.Context.FindScene("Scenes/Odd.gscene")->DroppedOnLoad == opened.Warnings);
+	CHECK(log.Contains(LogLevel::Warn, "Ghost: unknown component, ignored"));
+	fixture.Succeed("entity.rename", J(R"({"entity": "A", "name": "B"})"));
+
+	// Every way of saving refuses: the file would lose the Ghost component.
+	const CommandResult refused = fixture.Reject("scene.save", Json::object(), CommandErrorCode::Conflict);
+	CHECK(refused.Message.find("/Entities/0/Components/Ghost: unknown component, ignored") != std::string::npos);
+	CHECK(refused.Message.find("scene.save --discard-unknown") != std::string::npos);
+	fixture.Reject("scene.save", J(R"({"all": true})"), CommandErrorCode::Conflict);
+	const Result<std::vector<std::string>> all = fixture.Context.SaveAll();
+	REQUIRE_FALSE(all.HasValue());
+	CHECK(GetCommandErrorCode(all.GetError()) == CommandErrorCode::Conflict);
+	CHECK(ProjectFile(fixture, "Scenes/Odd.gscene") == text);
+	CHECK(fixture.Context.GetUndoStack().IsDirty("Scenes/Odd.gscene"));
+	// Opening it again (it is open) still says what is missing.
+	CHECK(fixture.Run("scene.open", J(R"({"path": "Scenes/Odd.gscene"})")).Warnings == opened.Warnings);
+
+	fixture.Succeed("scene.save", J(R"({"discardUnknown": true})"));
+	CHECK(ProjectFile(fixture, "Scenes/Odd.gscene").find("Ghost") == std::string::npos);
+	CHECK(ProjectFile(fixture, "Scenes/Odd.gscene").find("\"B\"") != std::string::npos);
+	CHECK(fixture.Context.FindScene("Scenes/Odd.gscene")->DroppedOnLoad.empty());
+	fixture.Succeed("entity.rename", J(R"({"entity": "B", "name": "C"})"));
+	fixture.Succeed("scene.save"); // the file and the world agree now
+
+	// A scene that loaded completely saves as before.
+	fixture.Succeed("scene.set-active", J(R"({"path": "Scenes/Main.gscene"})"));
+	fixture.Create("Fine");
+	fixture.Succeed("scene.save");
 }
 
 TEST_CASE("Automation: scene.list shows open scenes and the scene files of the project")

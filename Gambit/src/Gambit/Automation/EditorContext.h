@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -58,6 +60,10 @@ namespace Gambit
 		std::string Path;
 		SceneMetadata Metadata;
 		Scope<World> Scene;
+		// What the load left out because this build cannot read it (unknown components, fields and members, as
+		// "<path><pointer>: <message>"). The world does not hold that data, so saving the scene would delete it from
+		// the file: EditorContext::SaveScene refuses unless told to discard it.
+		std::vector<std::string> DroppedOnLoad{};
 	};
 
 	// Normalizes a path given to a command: forward slashes, no "." or ".." segments. Fails (with the reason) for
@@ -119,6 +125,11 @@ namespace Gambit
 		// Fails with a Conflict error when the scene has unsaved changes and `discardChanges` is false. Drops the
 		// scene's undo history and takes its entities out of the selection.
 		[[nodiscard]] Result<void> CloseScene(std::string_view path, bool discardChanges);
+		// For a command that is about to replace the file of a document (asset.import, bulk.write-csv): fails with a
+		// Conflict error when the scene or table with this path is open with unsaved changes (the new file would lose
+		// them, or saving them would overwrite it), else closes it so that it is read again from the new file. Returns
+		// whether a document was open.
+		[[nodiscard]] Result<bool> CloseReplacedDocument(std::string_view path);
 
 		// A path given to a command for a file the project keeps as an asset: normalized (NormalizeProjectPath), below
 		// one of the project's asset directories and, when `extension` is not empty (".gscene"), ending in it (ignoring
@@ -130,13 +141,19 @@ namespace Gambit
 
 		// The world of the open scene with this path; nullptr when there is none.
 		[[nodiscard]] World* FindWorld(std::string_view document) const;
-		// The data table asset with this path, loaded (and cached by the asset manager).
+		// The data table asset with this path, opened as a document: the first call loads it and the context keeps that
+		// object until the table is closed, so that its edits and their undo history stay with it even when the asset
+		// manager reloads or unloads the asset.
 		[[nodiscard]] Result<Ref<DataTable>> GetTable(std::string_view path);
-		// Writes the document and marks it clean. A new asset file is registered (its .meta file is created).
-		[[nodiscard]] Result<void> SaveDocument(std::string_view document);
-		[[nodiscard]] Result<void> SaveScene(SceneDocument& scene);
+		// Whether the table is open (GetTable was called for it).
+		[[nodiscard]] bool IsTableOpen(std::string_view path) const;
+		// Writes the document and marks it clean. A new asset file is registered (its .meta file is created). A scene
+		// that was loaded without some of its data (SceneDocument::DroppedOnLoad) is refused with a Conflict error
+		// unless `discardUnknown` is true.
+		[[nodiscard]] Result<void> SaveDocument(std::string_view document, bool discardUnknown = false);
+		[[nodiscard]] Result<void> SaveScene(SceneDocument& scene, bool discardUnknown = false);
 		// Saves every dirty document; returns their paths. Stops at the first failure.
-		[[nodiscard]] Result<std::vector<std::string>> SaveAll();
+		[[nodiscard]] Result<std::vector<std::string>> SaveAll(bool discardUnknown = false);
 
 		// ---- Selection ----
 
@@ -162,9 +179,11 @@ namespace Gambit
 		// Adds the systems a simulation needs beyond the engine's own (scripts, physics) to every simulation world.
 		void SetSimulationSetup(WorldSetup setup) { m_SimulationSetup = std::move(setup); }
 		// The one way to start a simulation of an edited scene (editor play, sim.run): a copy of `scene` that
-		// BeginSimulation has started from the scene's seed, with the TransformSystem and the configured systems added,
-		// so that it runs exactly like the same scene loaded from its file (D-020 "Simulation start").
-		[[nodiscard]] Result<Scope<World>> CreateSimulationWorld(const World& scene) const;
+		// BeginSimulation has started from `seed` (default: the scene's seed), then the TransformSystem and the
+		// configured systems added, so that it runs exactly like the same scene loaded from its file (D-020 "Simulation
+		// start"). What the systems do when they are created (draw random numbers, queue commands) is part of the run.
+		[[nodiscard]] Result<Scope<World>>
+		CreateSimulationWorld(const World& scene, std::optional<uint64_t> seed = std::nullopt) const;
 
 		void SetPlayController(Ref<IPlayController> controller) { m_PlayController = std::move(controller); }
 		[[nodiscard]] IPlayController* GetPlayController() const noexcept { return m_PlayController.get(); }
@@ -182,6 +201,7 @@ namespace Gambit
 		Scope<CommentStore> m_Comments;
 		std::vector<Scope<SceneDocument>> m_Scenes;
 		SceneDocument* m_ActiveScene = nullptr;
+		std::map<std::string, Ref<DataTable>, std::less<>> m_Tables; // the open tables by path
 		std::vector<UUID> m_Selection;
 		UndoStack m_Undo;
 		Ref<RingBufferSink> m_LogBuffer;

@@ -85,12 +85,128 @@ TEST_CASE("Automation: asset.import refuses what it cannot import")
 	CHECK(
 		reject(R"(, "path": "Data/Weapons.csv")", CommandErrorCode::AlreadyExists).find("pass overwrite")
 		!= std::string::npos);
-	fixture.Succeed(
-		"asset.import", J(R"({"source": ")" + source + R"(", "path": "Data/Weapons.csv", "overwrite": true})"));
 	fixture.Reject(
 		"asset.import", J(R"({"source": ")" + (fixture.Directory.GetPath() / "missing.csv").generic_string() + R"("})"),
 		CommandErrorCode::NotFound);
 	fixture.Reject("asset.import", J(R"({"path": "Data/X.csv"})"), CommandErrorCode::InvalidArguments);
+}
+
+TEST_CASE("Automation: asset.import --overwrite replaces the content and keeps the handle")
+{
+	AutomationFixture fixture;
+	fixture.CreateProject();
+	const std::filesystem::path first = WriteNative(fixture, "v1/Weapons.csv", "Id,Damage:float\npistol,12.5\n");
+	const std::string handle = Import(fixture, first, "Data/Weapons.csv");
+	CHECK(fixture.Succeed("data.get", J(R"({"table": "Data/Weapons.csv"})")).at("rowCount") == 1); // loaded and cached
+
+	const std::filesystem::path second =
+		WriteNative(fixture, "v2/Weapons.csv", "Id,Damage:float\npistol,14.0\nrifle,30.0\n");
+	const Json replaced = fixture.Succeed(
+		"asset.import",
+		J(R"({"source": ")" + second.generic_string() + R"(", "path": "Data/Weapons.csv", "overwrite": true})"));
+	CHECK(replaced.at("handle") == handle); // references to the asset stay valid
+	CHECK(
+		ReadTextFile(fixture.GetProjectDirectory() / "Data/Weapons.csv")
+		== "Id,Damage:float\npistol,14.0\nrifle,30.0\n");
+	CHECK(Json::parse(ReadTextFile(fixture.GetProjectDirectory() / "Data/Weapons.csv.meta")).at("Handle") == handle);
+	CHECK(fixture.Succeed("data.get", J(R"({"table": "Data/Weapons.csv"})")).at("rowCount") == 2); // read again
+
+	// The settings of the .meta file stay unless new ones are given; given ones replace them.
+	const std::filesystem::path logo = WriteNative(fixture, "Logo.png", "png");
+	fixture.Succeed(
+		"asset.import", J(R"({"source": ")" + logo.generic_string() + R"(", "importSettings": {"SRGB": true}})"));
+	const auto settings = [&] {
+		return Json::parse(ReadTextFile(fixture.GetProjectDirectory() / "Assets/Logo.png.meta")).at("ImportSettings");
+	};
+	fixture.Succeed("asset.import", J(R"({"source": ")" + logo.generic_string() + R"(", "overwrite": true})"));
+	CHECK(settings() == J(R"({"SRGB": true})"));
+	const Json changed = fixture.Succeed(
+		"asset.import",
+		J(R"({"source": ")" + logo.generic_string() + R"(", "overwrite": true, "importSettings": {"SRGB": false}})"));
+	CHECK(changed.at("importSettings") == J(R"({"SRGB": false})"));
+	CHECK(settings() == J(R"({"SRGB": false})"));
+	CHECK(
+		fixture.Succeed("asset.info", J(R"({"asset": "Assets/Logo.png"})")).at("importSettings")
+		== J(R"({"SRGB": false})"));
+}
+
+TEST_CASE("Automation: asset.import --overwrite does not replace open documents with unsaved changes")
+{
+	AutomationFixture fixture;
+	fixture.CreateProject();
+	const std::filesystem::path table = WriteNative(fixture, "Weapons.csv", "Id,Damage:float\npistol,12.5\n");
+	Import(fixture, table, "Data/Weapons.csv");
+	const std::string importArguments =
+		R"({"source": ")" + table.generic_string() + R"(", "path": "Data/Weapons.csv", "overwrite": true})";
+
+	// A table with unsaved edits: the import would lose them, or a later save would undo the import.
+	fixture.Succeed(
+		"data.set", J(R"({"table": "Data/Weapons.csv", "row": "pistol", "column": "Damage", "value": 20})"));
+	const CommandResult dirtyTable = fixture.Reject("asset.import", J(importArguments), CommandErrorCode::Conflict);
+	CHECK(dirtyTable.Message.find("unsaved changes") != std::string::npos);
+	CHECK(
+		fixture.Succeed("data.get", J(R"({"table": "Data/Weapons.csv", "row": "pistol", "column": "Damage"})"))
+			.at("value")
+		== 20.0);
+
+	// Saved, the import goes ahead: the open table is closed, its history dropped, and the file read again.
+	fixture.Succeed("scene.save", J(R"({"all": true})"));
+	const CommandResult imported = fixture.Run("asset.import", J(importArguments));
+	REQUIRE(imported.Ok);
+	REQUIRE(imported.Warnings.size() == 1);
+	CHECK(imported.Warnings[0].find("was closed") != std::string::npos);
+	CHECK_FALSE(fixture.Context.IsTableOpen("Data/Weapons.csv"));
+	CHECK(fixture.Context.GetUndoStack().GetUndoHistory().empty());
+	CHECK(
+		fixture.Succeed("data.get", J(R"({"table": "Data/Weapons.csv", "row": "pistol", "column": "Damage"})"))
+			.at("value")
+		== 12.5);
+
+	// The same for an open scene.
+	fixture.Create("Unsaved");
+	const std::filesystem::path scene = WriteNative(
+		fixture, "Imported.gscene",
+		R"({"Version": 1, "Name": "Imported", "Seed": 3, "Entities": [{"UUID": "0x5", "Components": {"Tag": {"Name": "FromFile"}}}]})");
+	const std::string sceneArguments =
+		R"({"source": ")" + scene.generic_string() + R"(", "path": "Scenes/Main.gscene", "overwrite": true})";
+	fixture.Reject("asset.import", J(sceneArguments), CommandErrorCode::Conflict);
+	CHECK(ReadTextFile(fixture.GetProjectDirectory() / "Scenes/Main.gscene").find("FromFile") == std::string::npos);
+	REQUIRE(fixture.Context.GetActiveScene() != nullptr);
+	CHECK(fixture.Scene().FindEntityByName("Unsaved").IsValid());
+
+	fixture.Succeed("scene.save");
+	fixture.Succeed("asset.import", J(sceneArguments));
+	CHECK(fixture.Context.FindScene("Scenes/Main.gscene") == nullptr); // closed; the new file is what opens next
+	CHECK(fixture.Context.GetUndoStack().GetDirtyDocuments().empty());
+	fixture.Succeed("scene.open", J(R"({"path": "Scenes/Main.gscene"})"));
+	CHECK(fixture.Scene().FindEntityByName("FromFile").IsValid());
+	CHECK_FALSE(fixture.Scene().FindEntityByName("Unsaved").IsValid());
+}
+
+TEST_CASE("Automation: an open data table keeps its edits when the asset manager drops or reloads it")
+{
+	AutomationFixture fixture;
+	fixture.CreateProject();
+	Import(fixture, WriteNative(fixture, "Weapons.csv", "Id,Damage:float\npistol,12.5\n"), "Data/Weapons.csv");
+	fixture.Succeed(
+		"data.set", J(R"({"table": "Data/Weapons.csv", "row": "pistol", "column": "Damage", "value": 20})"));
+
+	AssetManager& assets = fixture.Context.GetProject()->GetAssets();
+	const AssetHandle handle = assets.GetHandle("Data/Weapons.csv");
+	assets.UnloadAsset(handle);
+	REQUIRE(assets.ReloadAsset(handle).HasValue()); // a file watcher would do this
+	const auto damage = [&] {
+		return fixture.Succeed("data.get", J(R"({"table": "Data/Weapons.csv", "row": "pistol", "column": "Damage"})"))
+			.at("value");
+	};
+	CHECK(damage() == 20.0); // the open table, not the reloaded asset
+
+	// Undo and saving work on that table too.
+	fixture.Succeed("undo");
+	CHECK(damage() == 12.5);
+	fixture.Succeed("redo");
+	fixture.Succeed("scene.save", J(R"({"all": true})"));
+	CHECK(ReadTextFile(fixture.GetProjectDirectory() / "Data/Weapons.csv").find("pistol,20.0") != std::string::npos);
 }
 
 TEST_CASE("Automation: asset.list and asset.info describe the assets")
@@ -200,13 +316,31 @@ TEST_CASE("Automation: prefab commands explain their refusals")
 	AutomationFixture fixture;
 	fixture.CreateProject();
 	fixture.Create("Crate");
-	fixture.Succeed("prefab.create", J(R"({"entity": "Crate", "path": "Assets/Crate.gprefab", "name": "Box"})"));
+	const Json created =
+		fixture.Succeed("prefab.create", J(R"({"entity": "Crate", "path": "Assets/Crate.gprefab", "name": "Box"})"));
+	CHECK(created.at("name") == "Box");
+	const auto prefabFile = [&] {
+		return Json::parse(ReadTextFile(fixture.GetProjectDirectory() / "Assets/Crate.gprefab"));
+	};
+	CHECK(prefabFile().at("Name") == "Box");
+	CHECK(prefabFile().at("Entities").size() == 1);
 	CHECK(
 		fixture.Succeed("asset.info", J(R"({"asset": "Assets/Crate.gprefab"})")).at("path") == "Assets/Crate.gprefab");
 
 	fixture.Reject(
 		"prefab.create", J(R"({"entity": "Crate", "path": "Assets/Crate.gprefab"})"), CommandErrorCode::AlreadyExists);
-	fixture.Succeed("prefab.create", J(R"({"entity": "Crate", "path": "Assets/Crate.gprefab", "overwrite": true})"));
+	CHECK(prefabFile().at("Name") == "Box");
+	// Overwriting writes the subtree as it is now, under the same handle.
+	fixture.Create("Lid", J(R"({"parent": "Crate"})"));
+	const Json replaced = fixture.Succeed(
+		"prefab.create", J(R"({"entity": "Crate", "path": "Assets/Crate.gprefab", "overwrite": true})"));
+	CHECK(replaced.at("handle") == created.at("handle"));
+	CHECK(replaced.at("entityCount") == 2);
+	CHECK(prefabFile().at("Name") == "Crate"); // the entity's name, as no other was given
+	CHECK(prefabFile().at("Entities").size() == 2);
+	const Json instance = fixture.Succeed("prefab.instantiate", J(R"({"prefab": "Assets/Crate.gprefab"})"));
+	CHECK(instance.at("entityCount") == 2); // the asset was read again
+	fixture.Succeed("undo");
 	fixture.Reject(
 		"prefab.create", J(R"({"entity": "Crate", "path": "Assets/Crate.scene"})"), CommandErrorCode::InvalidArguments);
 	fixture.Reject(

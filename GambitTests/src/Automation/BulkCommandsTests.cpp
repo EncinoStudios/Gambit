@@ -4,6 +4,8 @@
 
 #include "Gambit/Automation/BulkTable.h"
 
+#include <fstream>
+
 using namespace Gambit;
 using namespace Gambit::Tests;
 
@@ -228,7 +230,41 @@ TEST_CASE("Automation: bulk.set checks everything before it changes anything")
 		!= std::string::npos);
 }
 
-TEST_CASE("Automation: bulk.export-csv writes a table for spreadsheets")
+TEST_CASE("Automation: bulk.set calls with the same merge key are one undo step")
+{
+	Army army;
+	AutomationFixture& fixture = army.Fixture;
+	const uint64_t before = fixture.Hash();
+	const size_t depth = fixture.Context.GetUndoStack().GetUndoHistory().size();
+	// A gizmo drag of two selected units: one bulk.set per frame.
+	for (const int frame : { 1, 2, 3, 4 })
+	{
+		Json arguments = Json::object();
+		arguments["component"] = "Health";
+		arguments["table"] = Table({ { army.Alpha, "[" + std::to_string(10 + frame) + "]" },
+		                             { army.Gamma, "[" + std::to_string(50 + frame) + "]" } });
+		arguments["mergeKey"] = "drag-7";
+		fixture.Succeed("bulk.set", arguments);
+	}
+	CHECK(army.Health(army.Alpha).Current == 14.0f);
+	CHECK(army.Health(army.Gamma).Current == 54.0f);
+	CHECK(fixture.Context.GetUndoStack().GetUndoHistory().size() == depth + 1);
+	fixture.Succeed("undo");
+	CHECK(fixture.Hash() == before);
+	fixture.Succeed("redo");
+	CHECK(army.Health(army.Alpha).Current == 14.0f);
+
+	// Without the key every call is a step.
+	fixture.Succeed(
+		"bulk.set",
+		Json{ { "component", "Health" }, { "table", Table({ { army.Alpha, "[1]" }, { army.Gamma, "[1]" } }) } });
+	fixture.Succeed(
+		"bulk.set",
+		Json{ { "component", "Health" }, { "table", Table({ { army.Alpha, "[2]" }, { army.Gamma, "[2]" } }) } });
+	CHECK(fixture.Context.GetUndoStack().GetUndoHistory().size() == depth + 3);
+}
+
+TEST_CASE("Automation: bulk.export-csv makes a table for spreadsheets")
 {
 	Army army;
 	AutomationFixture& fixture = army.Fixture;
@@ -255,27 +291,88 @@ TEST_CASE("Automation: bulk.export-csv writes a table for spreadsheets")
 		+ ",Alpha,true,-5,18446744073709551615,0.1,1.5,2.0,3.0,0.0,0.0,0.0,1.0,0.5,0.25,1.0,\"a, "
 		  "\"\"b\"\"\",0x0000000000001234,0x000000000000ABCD,Fast,\"[1.0,2.0]\""));
 
-	// To a file of the project.
-	const Json written = fixture.Succeed("bulk.export-csv", J(R"({"component": "Health", "path": "Data/Health.csv"})"));
-	CHECK(written.at("path") == "Data/Health.csv");
+	fixture.Reject("bulk.export-csv", J(R"({"component": "Nope"})"), CommandErrorCode::NotFound);
+	// Only the text: it changes nothing, so a dry run (and any read-only host) may export.
+	const CommandInfo& info = *fixture.Commands.Find("bulk.export-csv");
+	CHECK_FALSE(info.HasFlag(CommandFlags::Mutating));
+	CHECK_FALSE(info.HasFlag(CommandFlags::WritesFiles));
+	fixture.Context.SetDryRun(true);
+	CHECK(fixture.Succeed("bulk.export-csv", J(R"({"component": "Health"})")).contains("csv"));
+}
+
+TEST_CASE("Automation: bulk.write-csv writes the table to a file and never replaces one by accident")
+{
+	Army army;
+	AutomationFixture& fixture = army.Fixture;
+	const CommandInfo& info = *fixture.Commands.Find("bulk.write-csv");
+	CHECK(info.HasFlag(CommandFlags::Mutating));
+	CHECK(info.HasFlag(CommandFlags::WritesFiles));
+	CHECK_FALSE(info.HasFlag(CommandFlags::Undoable));
+
+	const Json written =
+		fixture.Succeed("bulk.write-csv", J(R"({"component": "Health", "path": "Exports/Health.csv"})"));
+	CHECK(written.at("path") == "Exports/Health.csv");
+	CHECK(written.at("rows") == 3);
 	CHECK_FALSE(written.contains("csv"));
-	const std::string file = ReadTextFile(fixture.GetProjectDirectory() / "Data/Health.csv");
+	const std::string file = ReadTextFile(fixture.GetProjectDirectory() / "Exports/Health.csv");
+	CHECK(file == fixture.Succeed("bulk.export-csv", J(R"({"component": "Health"})")).at("csv").get<std::string>());
 	CHECK(file.starts_with("Entity,EntityName:string,Current:float,Maximum:float\n"));
 	CHECK(file.find(army.Gamma + ",Gamma,50.0,60.0") != std::string::npos);
 
+	// An existing file is replaced only on request.
+	const CommandResult exists = fixture.Reject(
+		"bulk.write-csv", J(R"({"component": "Tag", "path": "Exports/Health.csv"})"), CommandErrorCode::AlreadyExists);
+	CHECK(exists.Message.find("pass overwrite") != std::string::npos);
+	CHECK(ReadTextFile(fixture.GetProjectDirectory() / "Exports/Health.csv") == file);
+	fixture.Succeed("bulk.write-csv", J(R"({"component": "Tag", "path": "Exports/Health.csv", "overwrite": true})"));
+	CHECK(ReadTextFile(fixture.GetProjectDirectory() / "Exports/Health.csv")
+	          .starts_with("Entity,EntityName:string,Name"));
+
 	fixture.Reject(
-		"bulk.export-csv", J(R"({"component": "Health", "path": "Data/Health.txt"})"),
+		"bulk.write-csv", J(R"({"component": "Health", "path": "Data/Health.txt"})"),
 		CommandErrorCode::InvalidArguments);
 	fixture.Reject(
-		"bulk.export-csv", J(R"({"component": "Health", "path": "../Health.csv"})"),
-		CommandErrorCode::InvalidArguments);
-	fixture.Reject("bulk.export-csv", J(R"({"component": "Nope"})"), CommandErrorCode::NotFound);
+		"bulk.write-csv", J(R"({"component": "Health", "path": "../Health.csv"})"), CommandErrorCode::InvalidArguments);
+	fixture.Reject("bulk.write-csv", J(R"({"component": "Health"})"), CommandErrorCode::InvalidArguments); // no path
 	fixture.Context.SetDryRun(true);
 	fixture.Reject(
-		"bulk.export-csv", J(R"({"component": "Health", "path": "Data/Dry.csv"})"), CommandErrorCode::Unsupported);
+		"bulk.write-csv", J(R"({"component": "Health", "path": "Data/Dry.csv"})"), CommandErrorCode::Unsupported);
 	CHECK_FALSE(std::filesystem::exists(fixture.GetProjectDirectory() / "Data/Dry.csv"));
-	CHECK(
-		fixture.Succeed("bulk.export-csv", J(R"({"component": "Health"})")).contains("csv")); // the text needs no file
+}
+
+TEST_CASE("Automation: bulk.write-csv over a data table refuses unsaved edits and reloads a clean table")
+{
+	Army army;
+	AutomationFixture& fixture = army.Fixture;
+	const std::filesystem::path source = fixture.Directory.GetPath() / "Weapons.csv";
+	std::ofstream(source, std::ios::binary) << "Id,Damage:float\npistol,12.5\n";
+	fixture.Succeed(
+		"asset.import", J(R"({"source": ")" + source.generic_string() + R"(", "path": "Data/Weapons.csv"})"));
+	fixture.Succeed(
+		"data.set", J(R"({"table": "Data/Weapons.csv", "row": "pistol", "column": "Damage", "value": 20})"));
+
+	// The table has unsaved edits: replacing its file would lose them, or saving them later would undo the export.
+	const std::string original = ReadTextFile(fixture.GetProjectDirectory() / "Data/Weapons.csv");
+	const CommandResult refused = fixture.Reject(
+		"bulk.write-csv", J(R"({"component": "Health", "path": "Data/Weapons.csv", "overwrite": true})"),
+		CommandErrorCode::Conflict);
+	CHECK(refused.Message.find("unsaved changes") != std::string::npos);
+	CHECK(ReadTextFile(fixture.GetProjectDirectory() / "Data/Weapons.csv") == original);
+	CHECK(fixture.Context.GetUndoStack().IsDirty("Data/Weapons.csv"));
+
+	// Saved, the open table is closed and read again from the new file.
+	fixture.Succeed("scene.save", J(R"({"all": true})"));
+	const size_t history = fixture.Context.GetUndoStack().GetUndoHistory().size();
+	const CommandResult replaced =
+		fixture.Run("bulk.write-csv", J(R"({"component": "Health", "path": "Data/Weapons.csv", "overwrite": true})"));
+	REQUIRE(replaced.Ok);
+	CHECK(replaced.Warnings.size() == 1);
+	CHECK_FALSE(fixture.Context.IsTableOpen("Data/Weapons.csv"));
+	// The edit of the replaced table is gone with it; the scene's history stays.
+	CHECK(fixture.Context.GetUndoStack().GetUndoHistory().size() == history - 1);
+	const Json table = fixture.Succeed("data.get", J(R"({"table": "Data/Weapons.csv"})"));
+	CHECK(table.at("rowCount") == 3); // the Health rows of the army
+	CHECK(fixture.Context.GetUndoStack().GetDirtyDocuments().empty());
 }
 
 TEST_CASE("Automation: bulk.import-csv applies an edited CSV and round-trips every field type")
@@ -336,7 +433,7 @@ TEST_CASE("Automation: bulk.import-csv reads a file of the project and explains 
 {
 	Army army;
 	AutomationFixture& fixture = army.Fixture;
-	fixture.Succeed("bulk.export-csv", J(R"({"component": "Health", "path": "Data/Health.csv"})"));
+	fixture.Succeed("bulk.write-csv", J(R"({"component": "Health", "path": "Data/Health.csv"})"));
 	std::string text = ReadTextFile(fixture.GetProjectDirectory() / "Data/Health.csv");
 	text.replace(text.find(",10.0,"), 6, ",11.0,");
 	REQUIRE(fixture.Context.GetProject()->GetVFS().WriteText("Data/Health.csv", text).HasValue());

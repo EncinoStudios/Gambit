@@ -16,7 +16,7 @@ namespace Gambit
 	enum class ArgumentType : uint8_t
 	{
 		String,
-		Integer, // a whole number; 3.0 is accepted
+		Integer, // a whole number that fits int64, or uint64 for UnsignedArg; 3.0 is accepted
 		Number,
 		Boolean,
 		Array,
@@ -35,7 +35,7 @@ namespace Gambit
 		ArgumentType Type = ArgumentType::String;
 		std::string Description{};
 		bool IsRequired = false;
-		std::vector<std::string> Enum{};           // String arguments: the allowed values
+		std::vector<std::string> Enum{};           // String arguments (and arrays of strings): the allowed values
 		std::optional<Json> Default{};             // used when the argument is absent; not for required arguments
 		ArgumentType ItemType = ArgumentType::Any; // Array arguments: the type of the elements
 		std::optional<double> Minimum{};           // Integer and Number arguments
@@ -75,8 +75,14 @@ namespace Gambit
 		}
 	};
 
+	// The maximum of UnsignedArg: 2^64 - 1, which a double rounds to 2^64.
+	inline constexpr double MaxUnsignedArgument = 18446744073709551615.0;
+
 	[[nodiscard]] ArgumentInfo StringArg(std::string name, std::string description);
+	// An int64 value (read with GetInteger).
 	[[nodiscard]] ArgumentInfo IntegerArg(std::string name, std::string description);
+	// A uint64 value from 0 to 2^64 - 1, such as a seed (an integer argument with that range; read with GetUnsigned).
+	[[nodiscard]] ArgumentInfo UnsignedArg(std::string name, std::string description);
 	[[nodiscard]] ArgumentInfo NumberArg(std::string name, std::string description);
 	[[nodiscard]] ArgumentInfo BooleanArg(std::string name, std::string description);
 	[[nodiscard]] ArgumentInfo ObjectArg(std::string name, std::string description);

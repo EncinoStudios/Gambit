@@ -153,6 +153,10 @@ namespace Gambit::Tests
 			{
 				result.ExitCode = static_cast<int>(code);
 			}
+			else
+			{
+				result.WaitError = "cannot read the exit code: " + DescribeLastError();
+			}
 			CloseHandle(process.hThread);
 			CloseHandle(process.hProcess);
 		}
@@ -252,14 +256,24 @@ namespace Gambit::Tests
 				}
 				if (done < 0 && errno != EINTR)
 				{
-					status = 0;
-					break;
+					// Without the child's status nothing is known about how it ended: ExitCode stays -1.
+					result.WaitError = std::string("waitpid failed: ") + std::strerror(errno);
+					return;
 				}
 				if (std::chrono::steady_clock::now() >= deadline)
 				{
 					kill(child, SIGKILL);
-					waitpid(child, &status, 0);
 					result.TimedOut = true;
+					pid_t reaped = 0;
+					do
+					{
+						reaped = waitpid(child, &status, 0);
+					} while (reaped < 0 && errno == EINTR);
+					if (reaped != child)
+					{
+						result.WaitError = std::string("waitpid failed: ") + std::strerror(errno);
+						return;
+					}
 					break;
 				}
 				std::this_thread::sleep_for(PollInterval);

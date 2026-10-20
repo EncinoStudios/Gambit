@@ -8,6 +8,22 @@
 
 namespace Gambit::CommandSupport
 {
+	namespace
+	{
+		// Failure when `report` holds warnings: commands are strict about their input, so an unknown member in a value
+		// is an error and not a warning (the message names it).
+		Result<void> RequireNoWarnings(const LoadReport& report)
+		{
+			if (report.IsEmpty())
+			{
+				return {};
+			}
+			const Diagnostic& first = report.GetWarnings().front();
+			return MakeCommandError(
+				CommandErrorCode::InvalidArguments, std::format("{}: {}", first.Path, first.Message));
+		}
+	}
+
 	void RegisterOrDie(CommandRegistry& registry, CommandInfo info, CommandHandler handler)
 	{
 		const std::string name = info.Name;
@@ -51,6 +67,11 @@ namespace Gambit::CommandSupport
 		return arguments.at(std::string(name)).get<int64_t>();
 	}
 
+	uint64_t GetUnsigned(const Json& arguments, std::string_view name, uint64_t fallback)
+	{
+		return Has(arguments, name) ? arguments.at(std::string(name)).get<uint64_t>() : fallback;
+	}
+
 	bool GetBool(const Json& arguments, std::string_view name, bool fallback)
 	{
 		return Has(arguments, name) ? arguments.at(std::string(name)).get<bool>() : fallback;
@@ -66,16 +87,6 @@ namespace Gambit::CommandSupport
 	CommandResult Fail(const Error& error, CommandErrorCode fallback)
 	{
 		return CommandResult::FromError(error, fallback);
-	}
-
-	Result<void> RequireNoWarnings(const LoadReport& report)
-	{
-		if (report.IsEmpty())
-		{
-			return {};
-		}
-		const Diagnostic& first = report.GetWarnings().front();
-		return MakeCommandError(CommandErrorCode::InvalidArguments, std::format("{}: {}", first.Path, first.Message));
 	}
 
 	// ---- Entities ----
@@ -333,8 +344,8 @@ namespace Gambit::CommandSupport
 					std::format("the field '{}.{}' is runtime state and cannot be set", info.GetName(), name));
 			}
 			const FieldValue start = current != nullptr ? field->GetValue(current) : field->Default;
-			Result<FieldValue> merged =
-				FieldValueMergeFromJson(*field, start, member, JsonPathAppend(componentPath, name), report);
+			Result<FieldValue> merged = FieldValueMergeFromJson(
+				*field, start, member, JsonPathAppend(componentPath, name), report, MergeAccess::Tool);
 			if (!merged)
 			{
 				return MakeCommandError(CommandErrorCode::InvalidArguments, merged.GetError().Message);

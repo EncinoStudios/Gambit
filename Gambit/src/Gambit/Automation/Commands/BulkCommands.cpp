@@ -50,9 +50,10 @@ namespace Gambit::Commands
 					"{}: {} {}", (*component)->GetName(), table->Total, table->Total == 1 ? "entity" : "entities"));
 		}
 
-		CommandResult Apply(EditorContext& context, const ComponentInfo& component, const BulkTable& table)
+		CommandResult
+		Apply(EditorContext& context, const ComponentInfo& component, const BulkTable& table, std::string_view mergeKey)
 		{
-			Result<size_t> changed = ApplyBulkTable(context, *context.GetActiveScene(), component, table);
+			Result<size_t> changed = ApplyBulkTable(context, *context.GetActiveScene(), component, table, mergeKey);
 			if (!changed)
 			{
 				return Fail(changed.GetError(), CommandErrorCode::InvalidArguments);
@@ -86,7 +87,22 @@ namespace Gambit::Commands
 			{
 				return Fail(table.GetError());
 			}
-			return Apply(context, **component, *table);
+			return Apply(context, **component, *table, GetString(arguments, "mergeKey"));
+		}
+
+		// The CSV text of one component of all entities of the active scene.
+		Result<std::string>
+		ExportCsv(EditorContext& context, const ComponentInfo& component, const Json& arguments, size_t& rows)
+		{
+			Result<BulkTable> table = ReadBulkTable(
+				*context.GetActiveScene()->Scene, component, GetFieldList(arguments), 0,
+				std::numeric_limits<size_t>::max());
+			if (!table)
+			{
+				return table.GetError();
+			}
+			rows = table->Rows.size();
+			return BulkTableToCsv(component, *table);
 		}
 
 		CommandResult BulkExportCsv(EditorContext& context, const Json& arguments)
@@ -96,31 +112,25 @@ namespace Gambit::Commands
 			{
 				return Fail(component.GetError());
 			}
-			const std::vector<std::string> fields = GetFieldList(arguments);
-			Result<BulkTable> table = ReadBulkTable(
-				*context.GetActiveScene()->Scene, **component, fields, 0, std::numeric_limits<size_t>::max());
-			if (!table)
-			{
-				return Fail(table.GetError());
-			}
-			Result<std::string> csv = BulkTableToCsv(**component, *table);
+			size_t rows = 0;
+			Result<std::string> csv = ExportCsv(context, **component, arguments, rows);
 			if (!csv)
 			{
 				return Fail(csv.GetError());
 			}
-
 			Json data = Json::object();
 			data["component"] = (*component)->GetName();
-			data["rows"] = table->Rows.size();
-			if (!Has(arguments, "path"))
+			data["rows"] = rows;
+			data["csv"] = std::move(*csv);
+			return CommandResult::Success(std::move(data), std::format("{} rows", rows));
+		}
+
+		CommandResult BulkWriteCsv(EditorContext& context, const Json& arguments)
+		{
+			Result<const ComponentInfo*> component = FindComponent(context, arguments);
+			if (!component)
 			{
-				data["csv"] = std::move(*csv);
-				return CommandResult::Success(std::move(data), std::format("{} rows", table->Rows.size()));
-			}
-			if (context.IsDryRun())
-			{
-				return Fail(
-					CommandErrorCode::Unsupported, "a dry run writes no files: leave out 'path' to get the CSV text");
+				return Fail(component.GetError());
 			}
 			Result<std::string> path = NormalizeProjectPath(GetString(arguments, "path"));
 			if (!path)
@@ -131,13 +141,46 @@ namespace Gambit::Commands
 			{
 				return Fail(CommandErrorCode::InvalidArguments, std::format("'{}' must end in .csv", *path));
 			}
-			if (Result<void> written = context.GetProject()->GetVFS().WriteText(*path, *csv); !written)
+			VFS& vfs = context.GetProject()->GetVFS();
+			if (vfs.Exists(*path) && !GetBool(arguments, "overwrite", false))
+			{
+				return Fail(
+					CommandErrorCode::AlreadyExists,
+					std::format("'{}' exists already: pass overwrite to replace it", *path));
+			}
+			size_t rows = 0;
+			Result<std::string> csv = ExportCsv(context, **component, arguments, rows);
+			if (!csv)
+			{
+				return Fail(csv.GetError());
+			}
+			// The file may be a data table: an open one with edits would lose them or later overwrite the export.
+			Result<bool> closed = context.CloseReplacedDocument(*path);
+			if (!closed)
+			{
+				return Fail(closed.GetError());
+			}
+			if (Result<void> written = vfs.WriteText(*path, *csv); !written)
 			{
 				return Fail(AddSource(*path, written.GetError()));
 			}
+			AssetManager& assets = context.GetProject()->GetAssets();
+			if (const AssetRecord* record = assets.FindByPath(*path); record != nullptr)
+			{
+				assets.UnloadAsset(record->Handle); // the asset is read again from the new content
+			}
+			Json data = Json::object();
+			data["component"] = (*component)->GetName();
+			data["rows"] = rows;
 			data["path"] = *path;
-			return CommandResult::Success(
-				std::move(data), std::format("Wrote {} rows to '{}'", table->Rows.size(), *path));
+			CommandResult result =
+				CommandResult::Success(std::move(data), std::format("Wrote {} rows to '{}'", rows, *path));
+			if (*closed)
+			{
+				result.Warnings.push_back(
+					std::format("the data table '{}' was open; it was closed because its file was replaced", *path));
+			}
+			return result;
 		}
 
 		CommandResult BulkImportCsv(EditorContext& context, const Json& arguments)
@@ -181,7 +224,7 @@ namespace Gambit::Commands
 			{
 				return Fail(table.GetError());
 			}
-			return Apply(context, **component, *table);
+			return Apply(context, **component, *table, {});
 		}
 	}
 
@@ -216,13 +259,16 @@ namespace Gambit::Commands
 				.Description =
 					"The table has the shape bulk.get returns; columns may be a subset of the fields. Struct cells "
 					"merge like component.set, cells that already have their value change nothing. The edits are "
-					"checked first and then applied as one undo step.",
+					"checked first and then applied as one undo step; consecutive calls with the same mergeKey that "
+					"change the same entities in the same order become one step (a drag of several entities).",
 				.Arguments = { StringArg("component", componentHelp).Require(),
 		                       ObjectArg(
 								   "table",
 								   "{ \"columns\": [\"Current\"], \"rows\": [{ \"entity\": \"0x...\", \"values\": [50] "
 								   "}] }")
-		                           .Require() },
+		                           .Require(),
+		                       StringArg(
+								   "mergeKey", "Merge with the previous bulk.set of the same key (one undo step)") },
 				.ResultDescription = "{ component, rows, changed }",
 				.Flags = CommandFlags::Mutating | CommandFlags::Undoable | CommandFlags::RequiresScene,
 			},
@@ -232,17 +278,34 @@ namespace Gambit::Commands
 			registry,
 			CommandInfo{
 				.Name = "bulk.export-csv",
-				.Summary = "Export one component of all entities as CSV for a spreadsheet",
+				.Summary = "Export one component of all entities as CSV text for a spreadsheet",
 				.Description = "The first column holds the entity UUIDs; vectors get one column per component "
-							   "(Translation_X), structs and arrays one column of JSON text.",
+							   "(Translation_X), structs and arrays one column of JSON text. bulk.write-csv writes "
+							   "the same text to a file.",
 				.Arguments = { StringArg("component", componentHelp).Require(),
 		                       ArrayArg(
-								   "fields", ArgumentType::String, "Only these fields (default: all stored fields)"),
-		                       StringArg("path", "Project path of the .csv file to write (default: return the text)") },
-				.ResultDescription = "{ component, rows, csv } or { component, rows, path }",
+								   "fields", ArgumentType::String, "Only these fields (default: all stored fields)") },
+				.ResultDescription = "{ component, rows, csv }",
 				.Flags = CommandFlags::RequiresScene,
 			},
 			BulkExportCsv);
+
+		RegisterOrDie(
+			registry,
+			CommandInfo{
+				.Name = "bulk.write-csv",
+				.Summary = "Write one component of all entities to a CSV file of the project",
+				.Description = "The text of bulk.export-csv. An existing file is only replaced with overwrite; an open "
+							   "data table of the file is closed, or the write refused when it has unsaved changes.",
+				.Arguments = { StringArg("component", componentHelp).Require(),
+		                       StringArg("path", "Project path of the .csv file, e.g. Exports/Health.csv").Require(),
+		                       ArrayArg(
+								   "fields", ArgumentType::String, "Only these fields (default: all stored fields)"),
+		                       BooleanArg("overwrite", "Replace a file that exists").WithDefault(false) },
+				.ResultDescription = "{ component, rows, path }",
+				.Flags = CommandFlags::Mutating | CommandFlags::RequiresScene | CommandFlags::WritesFiles,
+			},
+			BulkWriteCsv);
 
 		RegisterOrDie(
 			registry,

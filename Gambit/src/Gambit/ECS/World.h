@@ -128,11 +128,12 @@ namespace Gambit
 		// Stores the seed and reseeds the random generator with it.
 		void SetSeed(uint64_t seed);
 		// Starts a simulation from the entities as they are (D-020 "Simulation start"): reseeds the random generator
-		// from `seed` (the scene's seed), zeroes the tick counter and the simulated time and drops the events of both
-		// buffers. A scene file stores only the seed, so this is what makes a copy of an edited scene (whose random
-		// generator may have been used by editing) start exactly like the same scene loaded from its file. Every
-		// simulation entry point calls it before the first tick: editor play, `sim.run`, Lua tests, runtime scene
-		// load. Not while ticking.
+		// from `seed` (the scene's seed), zeroes the tick counter and the simulated time, drops the events of both
+		// buffers and the pending commands of the command buffer. A scene file stores only the seed, so this is what
+		// makes a copy of an edited scene (whose random generator, events and command buffer may have been used by
+		// editing or an earlier run) start exactly like the same scene loaded from its file. Every simulation entry
+		// point calls it once, before the systems are created and before the first tick: editor play, `sim.run`, Lua
+		// tests, runtime scene load. Not while ticking.
 		void BeginSimulation(uint64_t seed);
 		// The number of Play ticks run (the tick being run, during a tick).
 		[[nodiscard]] uint64_t GetTick() const noexcept { return m_Tick; }

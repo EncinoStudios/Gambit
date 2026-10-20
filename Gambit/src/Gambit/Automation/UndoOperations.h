@@ -32,7 +32,8 @@ namespace Gambit
 		[[nodiscard]] std::string GetDescription() const override { return m_Description; }
 		void GetDocuments(std::vector<std::string>& documents) const override { documents.push_back(m_Document); }
 		// Merges edits of the same entity and component; the merged operation sets the union of the fields.
-		[[nodiscard]] bool TryMerge(const IUndoableOperation& later) override;
+		[[nodiscard]] bool CanMerge(const IUndoableOperation& later) const override;
+		void Merge(const IUndoableOperation& later) override;
 
 	private:
 		std::string m_Document;

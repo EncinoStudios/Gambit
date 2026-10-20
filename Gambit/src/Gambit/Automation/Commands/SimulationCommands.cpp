@@ -31,16 +31,15 @@ namespace Gambit::Commands
 				}
 			}
 
-			// The simulation runs on a copy that starts like the scene loaded from its file would (D-020).
-			Result<Scope<World>> created = context.CreateSimulationWorld(*scene.Scene);
+			// The simulation runs on a copy that starts like the scene loaded from its file would (D-020), exactly as
+			// editor play starts it.
+			const uint64_t seed = Has(arguments, "seed") ? GetUnsigned(arguments, "seed") : scene.Scene->GetSeed();
+			Result<Scope<World>> created = context.CreateSimulationWorld(*scene.Scene, seed);
 			if (!created)
 			{
 				return Fail(created.GetError());
 			}
 			World& world = **created;
-			const uint64_t seed =
-				Has(arguments, "seed") ? static_cast<uint64_t>(GetInteger(arguments, "seed")) : scene.Scene->GetSeed();
-			world.BeginSimulation(seed);
 
 			const uint32_t hz = context.GetProject()->GetSettings().SimulationHz;
 			const TimeStep step(1.0f / static_cast<float>(hz));
@@ -181,8 +180,7 @@ namespace Gambit::Commands
 				.Arguments = { IntegerArg("ticks", "Number of fixed ticks to run (at the project's simulation rate)")
 		                           .WithRange(0, MaxTicks)
 		                           .Require(),
-		                       IntegerArg("seed", "Seed of the random generator (default: the scene's seed)")
-		                           .WithMinimum(0),
+		                       UnsignedArg("seed", "Seed of the random generator (default: the scene's seed)"),
 		                       BooleanArg("hashes", "Also return the state hash after every tick").WithDefault(false),
 		                       ArrayArg(
 								   "components", ArgumentType::String,

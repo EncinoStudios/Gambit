@@ -3,6 +3,8 @@
 #include "AutomationFixture.h"
 #include "TestUtils/TempDirectory.h"
 
+#include "Gambit/Core/FileSystem.h"
+
 using namespace Gambit;
 using namespace Gambit::Tests;
 
@@ -197,4 +199,58 @@ TEST_CASE("Automation: a failing undoable command leaves the scene as it was")
 	CHECK(fixture.Scene().GetEntityCount() == 1);
 	CHECK(fixture.Context.GetUndoStack().GetUndoDescription() == "Create entity 'Crate'");
 	CHECK(fixture.Context.GetUndoStack().GetGroupDepth() == 0);
+}
+
+TEST_CASE("Automation: command results convert to JSON with stable error code names")
+{
+	// The wire format of the CLI, MCP and RPC (D-053).
+	const CommandResult success = CommandResult::Success(J(R"({"uuid": "0x1"})"), "Created");
+	CHECK(success.ToJson() == J(R"({"ok": true, "message": "Created", "data": {"uuid": "0x1"}})"));
+	CHECK(CommandResult::Success().ToJson() == J(R"({"ok": true, "data": {}})")); // empty members are left out
+
+	CommandResult warned = CommandResult::Success();
+	warned.Warnings = { "a", "b" };
+	CHECK(warned.ToJson() == J(R"({"ok": true, "data": {}, "warnings": ["a", "b"]})"));
+
+	CommandResult failure = CommandResult::Failure(CommandErrorCode::NotFound, "there is no entity 'X'");
+	CHECK(
+		failure.ToJson() == J(R"({"ok": false, "error": {"code": "not-found", "message": "there is no entity 'X'"}})"));
+	failure.Warnings = { "w" };
+	CHECK(failure.ToJson().at("warnings") == J(R"(["w"])"));
+
+	const std::pair<CommandErrorCode, std::string_view> names[] = {
+		{ CommandErrorCode::None, "none" },
+		{ CommandErrorCode::UnknownCommand, "unknown-command" },
+		{ CommandErrorCode::InvalidArguments, "invalid-arguments" },
+		{ CommandErrorCode::NoProject, "no-project" },
+		{ CommandErrorCode::NoScene, "no-scene" },
+		{ CommandErrorCode::NotFound, "not-found" },
+		{ CommandErrorCode::AlreadyExists, "already-exists" },
+		{ CommandErrorCode::Conflict, "conflict" },
+		{ CommandErrorCode::Unsupported, "unsupported" },
+		{ CommandErrorCode::Failed, "failed" },
+		{ CommandErrorCode::Internal, "internal" },
+	};
+	for (const auto& [code, name] : names)
+	{
+		CHECK(ToString(code) == name);
+		// An Error carries the code through the context and the operations.
+		const Error error = MakeCommandError(code, "message");
+		CHECK(GetCommandErrorCode(error) == code);
+		const CommandResult result = CommandResult::FromError(error);
+		CHECK(result.Code == code);
+		CHECK(result.Message == "message");
+	}
+
+	// Other errors: a missing file is NotFound, everything else the fallback.
+	CHECK(GetCommandErrorCode(MakeFileError(FileError::NotFound, "gone")) == CommandErrorCode::NotFound);
+	CHECK(GetCommandErrorCode(MakeFileError(FileError::PermissionDenied, "no")) == CommandErrorCode::Failed);
+	CHECK(GetCommandErrorCode(Error("plain")) == CommandErrorCode::Failed);
+	CHECK(
+		GetCommandErrorCode(Error("plain"), CommandErrorCode::InvalidArguments) == CommandErrorCode::InvalidArguments);
+	CHECK(CommandResult::FromError(Error("plain"), CommandErrorCode::Conflict).Code == CommandErrorCode::Conflict);
+	// AddSource keeps the code.
+	CHECK(
+		GetCommandErrorCode(AddSource("a.txt", MakeCommandError(CommandErrorCode::Conflict, "x")))
+		== CommandErrorCode::Conflict);
 }

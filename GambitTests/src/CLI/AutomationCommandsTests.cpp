@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -42,41 +43,79 @@ namespace
 		return Json::parse(text);
 	}
 
-	// Sets an environment variable of this process until the end of the scope.
+	// Sets (or, with nullptr, unsets) an environment variable of this process until the end of the scope, then restores
+	// the value it had.
 	class ScopedEnvironmentVariable
 	{
 	public:
 		ScopedEnvironmentVariable(const char* name, const char* value)
 			: m_Name(name)
 		{
-#if defined(GB_PLATFORM_WINDOWS)
-			_putenv_s(name, value);
-#else
-			setenv(name, value, 1);
-#endif
+			if (const char* previous = std::getenv(name); previous != nullptr)
+			{
+				m_Previous = previous;
+			}
+			Set(value);
 		}
 
-		~ScopedEnvironmentVariable()
-		{
-#if defined(GB_PLATFORM_WINDOWS)
-			_putenv_s(m_Name, "");
-#else
-			unsetenv(m_Name);
-#endif
-		}
+		~ScopedEnvironmentVariable() { Set(m_Previous.has_value() ? m_Previous->c_str() : nullptr); }
 
 		ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
 		ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
 
 	private:
+		void Set(const char* value) const
+		{
+#if defined(GB_PLATFORM_WINDOWS)
+			_putenv_s(m_Name, value != nullptr ? value : ""); // an empty value removes the variable
+#else
+			if (value != nullptr)
+			{
+				setenv(m_Name, value, 1);
+			}
+			else
+			{
+				unsetenv(m_Name);
+			}
+#endif
+		}
+
 		const char* m_Name;
+		std::optional<std::string> m_Previous;
 	};
 
-	// The gambit tool with the test components, running in this process on a temporary directory.
+	// Makes `directory` (created if needed) the working directory of this process until the end of the scope. The
+	// CLI opens the project of the working directory when none is named, so the tests run in a directory of their own.
+	class ScopedCurrentPath
+	{
+	public:
+		explicit ScopedCurrentPath(const std::filesystem::path& directory)
+			: m_Previous(std::filesystem::current_path())
+		{
+			std::filesystem::create_directories(directory);
+			std::filesystem::current_path(directory);
+		}
+
+		~ScopedCurrentPath()
+		{
+			std::error_code error;
+			std::filesystem::current_path(m_Previous, error);
+		}
+
+		ScopedCurrentPath(const ScopedCurrentPath&) = delete;
+		ScopedCurrentPath& operator=(const ScopedCurrentPath&) = delete;
+
+	private:
+		std::filesystem::path m_Previous;
+	};
+
+	// The gambit tool with the test components, running in this process on a temporary directory, which also holds the
+	// working directory (empty: no project there).
 	class Tool
 	{
 	public:
 		ScopedTempDirectory Directory;
+		ScopedCurrentPath WorkingDirectory{ Directory.GetPath() / "cwd" };
 		TypeRegistry Types;
 		CommandDispatcher Dispatcher{ "gambit" };
 
@@ -564,6 +603,7 @@ TEST_CASE("CLI: results are printed for people")
 
 TEST_CASE("CLI: comment commands are written by GAMBIT_AUTHOR or by the user")
 {
+	const ScopedEnvironmentVariable noAuthor("GAMBIT_AUTHOR", nullptr); // the shell running the tests may set it
 	const Tool tool;
 	tool.CreateProject();
 	const Captured added = tool.Succeed(
@@ -586,4 +626,84 @@ TEST_CASE("CLI: comment commands are written by GAMBIT_AUTHOR or by the user")
 	const Captured named =
 		tool.Succeed({ "comment", "add", "--kind", "Feature", "--feature", "ci", "--text", "Flaky", "--json" });
 	CHECK(named.AsJson().at("data").at("author") == "build-bot");
+}
+
+TEST_CASE("CLI: the project of the working directory is opened, and a broken one is reported")
+{
+	const Tool tool;
+	tool.CreateProject();
+	// The working directory of the tool has no project.
+	const Captured none = tool.Run({ "entity", "list" });
+	CHECK(none.ExitCode == ExitFailure);
+	CHECK(none.Err.find("needs an open project") != std::string::npos);
+
+	{
+		const ScopedCurrentPath inside(tool.Directory.GetPath() / "Game");
+		CHECK(tool.Run({ "entity", "list" }).ExitCode == ExitSuccess);
+	}
+
+	const std::filesystem::path broken = tool.Directory.GetPath() / "Broken";
+	tool.WriteNative(broken / "Broken.gproject", "{ not json");
+	const ScopedCurrentPath inside(broken);
+	const Captured failed = tool.Run({ "entity", "list" });
+	CHECK(failed.ExitCode == ExitFailure);
+	CHECK(failed.Err.find("cannot open the project in the current directory") != std::string::npos);
+	CHECK(failed.Err.find("parse error") != std::string::npos);
+	CHECK(failed.Err.find("needs an open project") == std::string::npos);
+}
+
+TEST_CASE("CLI: a scene with data this build cannot read is not saved over")
+{
+	const ScopedLogCapture log; // every load warns about the unknown component
+	const Tool tool;
+	tool.CreateProject();
+	const std::string scene =
+		R"({"Version": 1, "Name": "Main", "Seed": 1, "Entities": [{"UUID": "0x1", "Components": {"Tag": {"Name": "Player"}, "Inventory": {"Slots": 4}}}]})";
+	tool.WriteNative(tool.Directory.GetPath() / "Game" / "Scenes" / "Main.gscene", scene);
+
+	// The edit works, but saving would delete the Inventory component that this build does not know.
+	const Captured renamed =
+		tool.Run({ "entity", "rename", "--entity", "Player", "--name", "Hero", "--project", tool.Project() });
+	CHECK(renamed.ExitCode == ExitFailure);
+	CHECK(
+		renamed.Err.find("warning: Scenes/Main.gscene/Entities/0/Components/Inventory: unknown component, ignored")
+		!= std::string::npos);
+	CHECK(
+		renamed.Err.find("cannot save: Scenes/Main.gscene: 'Scenes/Main.gscene' was opened without data")
+		!= std::string::npos);
+	CHECK(tool.ReadProjectFile("Scenes/Main.gscene") == scene);
+	// The loader logs what it dropped once; the result carries it as a warning.
+	CHECK(
+		std::ranges::count_if(
+			log.GetEntries(),
+			[](const LogEntry& entry) {
+				return entry.Message.find("Inventory: unknown component, ignored") != std::string::npos;
+			})
+		== 1);
+
+	const Captured asJson =
+		tool.Run({ "entity", "rename", "--entity", "Player", "--name", "Hero", "--project", tool.Project(), "--json" });
+	const Json document = asJson.AsJson();
+	CHECK(document.at("error").at("code") == "conflict");
+	REQUIRE(document.at("warnings").size() == 1);
+	CHECK(tool.ReadProjectFile("Scenes/Main.gscene") == scene);
+
+	// Reading is fine and reports what the file holds that is not read.
+	const Captured listed = tool.Run({ "entity", "list", "--project", tool.Project(), "--json" });
+	CHECK(listed.ExitCode == ExitSuccess);
+	CHECK(listed.AsJson().at("warnings").size() == 1);
+
+	// Dropping the data takes an explicit save.
+	const std::filesystem::path batch =
+		tool.BatchFile(R"({"command": "entity.rename", "args": {"entity": "Player", "name": "Hero"}})"
+	                   "\n"
+	                   R"({"command": "scene.save", "args": {"discardUnknown": true}})"
+	                   "\n");
+	const Captured saved = tool.Run({ "batch", batch.generic_string(), "--project", tool.Project() });
+	INFO(saved.Err);
+	CHECK(saved.ExitCode == ExitSuccess);
+	CHECK(saved.Err.find("unknown component, ignored") != std::string::npos);
+	const std::string written = tool.ReadProjectFile("Scenes/Main.gscene");
+	CHECK(written.find("Hero") != std::string::npos);
+	CHECK(written.find("Inventory") == std::string::npos);
 }

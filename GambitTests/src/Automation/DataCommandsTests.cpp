@@ -29,9 +29,9 @@ namespace
 				"asset.import", J(R"({"source": ")" + source.generic_string() + R"(", "path": "Data/Weapons.csv"})"));
 		}
 
-		std::string Csv() const
+		std::string Csv()
 		{
-			Result<Ref<DataTable>> table = const_cast<EditorContext&>(Fixture.Context).GetTable("Data/Weapons.csv");
+			Result<Ref<DataTable>> table = Fixture.Context.GetTable("Data/Weapons.csv");
 			REQUIRE(table.HasValue());
 			return (*table)->ToCsv();
 		}

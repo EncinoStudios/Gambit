@@ -1,6 +1,7 @@
 #include "Cli/AutomationCommands.h"
 
 #include "Gambit/Automation/BuiltinCommands.h"
+#include "Gambit/Automation/CommandBatch.h"
 #include "Gambit/Core/FileSystem.h"
 #include "Gambit/Core/Log.h"
 
@@ -234,20 +235,6 @@ namespace Gambit::Cli
 			return name != nullptr && *name != '\0' ? name : "user";
 		}
 
-		std::string Trim(std::string_view text)
-		{
-			const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-			while (!text.empty() && isSpace(text.front()))
-			{
-				text.remove_prefix(1);
-			}
-			while (!text.empty() && isSpace(text.back()))
-			{
-				text.remove_suffix(1);
-			}
-			return std::string(text);
-		}
-
 		std::string DescribeType(const ArgumentInfo& argument)
 		{
 			if (!argument.Enum.empty())
@@ -393,7 +380,8 @@ namespace Gambit::Cli
 	}
 
 	Result<void> AutomationProvider::PrepareContext(
-		EditorContext& context, const GlobalOptions& options, bool needsProject, bool needsScene) const
+		EditorContext& context, const GlobalOptions& options, bool needsProject, bool needsScene,
+		std::vector<std::string>& warnings) const
 	{
 		context.SetDryRun(options.DryRun);
 		context.SetAuthorName(DefaultAuthor());
@@ -408,15 +396,27 @@ namespace Gambit::Cli
 		else if (needsProject)
 		{
 			// Without --project the project in the current directory, if there is one; commands that need a project say
-			// so.
+			// so when there is none. A project file that is there but cannot be read is an error of its own.
 			std::error_code error;
 			const std::filesystem::path directory = std::filesystem::current_path(error);
 			if (!error)
 			{
-				static_cast<void>(context.OpenProject(directory));
+				if (Result<void> opened = context.OpenProject(directory);
+				    !opened && !HasFileError(opened.GetError(), FileError::NotFound))
+				{
+					return Error::Format(
+						"cannot open the project in the current directory '{}': {}", FileSystem::ToUtf8(directory),
+						opened.GetError().Message);
+				}
 			}
 		}
 
+		const auto opened = [&](const SceneDocument& scene) -> Result<void> {
+			// What the load could not read (the loader has logged it) is also reported with the result: saving the
+			// scene would drop it.
+			warnings.insert(warnings.end(), scene.DroppedOnLoad.begin(), scene.DroppedOnLoad.end());
+			return context.SetActiveScene(scene.Path);
+		};
 		if (options.Scene.has_value())
 		{
 			if (context.GetProject() == nullptr)
@@ -429,8 +429,7 @@ namespace Gambit::Cli
 			{
 				return Error::Format("cannot open the scene '{}': {}", *options.Scene, scene.GetError().Message);
 			}
-			report.Log((*scene)->Path);
-			if (Result<void> active = context.SetActiveScene((*scene)->Path); !active)
+			if (Result<void> active = opened(**scene); !active)
 			{
 				return active;
 			}
@@ -446,8 +445,7 @@ namespace Gambit::Cli
 				Result<SceneDocument*> scene = context.LoadScene(start, report);
 				if (scene)
 				{
-					report.Log(start);
-					if (Result<void> active = context.SetActiveScene(start); !active)
+					if (Result<void> active = opened(**scene); !active)
 					{
 						return active;
 					}
@@ -517,13 +515,22 @@ namespace Gambit::Cli
 		const bool needsScene = command.Info->HasFlag(CommandFlags::RequiresScene);
 		const bool needsProject = needsScene || command.Info->HasFlag(CommandFlags::RequiresProject);
 		CommandResult result;
-		if (const Result<void> prepared = PrepareContext(editor, global, needsProject, needsScene); !prepared)
+		std::vector<std::string> loadWarnings;
+		if (const Result<void> prepared = PrepareContext(editor, global, needsProject, needsScene, loadWarnings);
+		    !prepared)
 		{
 			result = CommandResult::Failure(CommandErrorCode::Failed, prepared.GetError().Message);
 		}
 		else
 		{
 			result = m_Registry.Execute(editor, command.Info->Name, *arguments);
+		}
+		for (const std::string& warning : loadWarnings)
+		{
+			if (std::ranges::find(result.Warnings, warning) == result.Warnings.end()) // scene.open reports them too
+			{
+				result.Warnings.push_back(warning);
+			}
 		}
 
 		std::vector<std::string> saved;
@@ -536,8 +543,11 @@ namespace Gambit::Cli
 			}
 			else
 			{
-				result = CommandResult::Failure(
-					CommandErrorCode::Failed, std::format("cannot save: {}", written.GetError().Message));
+				std::vector<std::string> warnings = std::move(result.Warnings);
+				result = CommandResult::FromError(MakeCommandError(
+					GetCommandErrorCode(written.GetError()),
+					std::format("cannot save: {}", written.GetError().Message)));
+				result.Warnings = std::move(warnings);
 			}
 		}
 		PrintResult(context, m_ProgramName, command.Info, result, global.AsJson, saved);
@@ -678,124 +688,93 @@ namespace Gambit::Cli
 		}
 
 		EditorContext editor(m_Types);
-		if (const Result<void> prepared = PrepareContext(editor, options, true, true); !prepared)
+		std::vector<std::string> loadWarnings;
+		if (const Result<void> prepared = PrepareContext(editor, options, true, true, loadWarnings); !prepared)
 		{
 			context.Err << m_ProgramName << ": " << prepared.GetError().Message << '\n';
 			return ExitFailure;
 		}
-
-		size_t executed = 0;
-		size_t failed = 0;
-		int exitCode = ExitSuccess;
-		bool stopped = false;
-		std::istringstream lines(text);
-		size_t lineNumber = 0;
-		for (std::string raw; std::getline(lines, raw);)
+		if (!options.AsJson)
 		{
-			++lineNumber;
-			const std::string trimmed = Trim(raw);
-			if (trimmed.empty())
+			for (const std::string& warning : loadWarnings)
 			{
-				continue;
+				context.Err << "warning: " << warning << '\n';
 			}
-			++executed;
+		}
 
-			std::string commandName;
-			CommandResult result;
-			Result<Json> request = ParseJson(trimmed, std::format("line {}", lineNumber));
-			if (!request)
+		int exitCode = ExitSuccess;
+		const auto print = [&](const BatchStep& step) {
+			if (!step.Result.Ok)
 			{
-				result = CommandResult::Failure(CommandErrorCode::InvalidArguments, request.GetError().Message);
+				exitCode = std::max(exitCode, GetExitCode(step.Result));
 			}
-			else if (!request->is_object() || !request->contains("command") || !request->at("command").is_string())
-			{
-				result = CommandResult::Failure(
-					CommandErrorCode::InvalidArguments,
-					std::format("line {}: expected {{\"command\": \"<name>\", \"args\": {{...}}}}", lineNumber));
-			}
-			else
-			{
-				commandName = request->at("command").get<std::string>();
-				result = m_Registry.Execute(
-					editor, commandName, request->contains("args") ? request->at("args") : Json::object());
-			}
-
 			if (options.AsJson)
 			{
-				Json document = result.ToJson();
-				document["line"] = lineNumber;
-				document["command"] = commandName;
+				Json document = step.Result.ToJson();
+				document["line"] = step.Line;
+				document["command"] = step.Command;
 				context.Out << Compact(document) << '\n';
+				return;
+			}
+			const std::string label = std::format("[{}] {}", step.Line, step.Command.empty() ? "?" : step.Command);
+			if (step.Result.Ok)
+			{
+				context.Out << label << ": " << (step.Result.Message.empty() ? "ok" : step.Result.Message) << '\n';
 			}
 			else
 			{
-				const std::string label = std::format("[{}] {}", lineNumber, commandName.empty() ? "?" : commandName);
-				if (result.Ok)
-				{
-					context.Out << label << ": " << (result.Message.empty() ? "ok" : result.Message) << '\n';
-				}
-				else
-				{
-					context.Out << label << ": error: " << result.Message << '\n';
-				}
-				for (const std::string& warning : result.Warnings)
-				{
-					context.Err << "warning: " << warning << '\n';
-				}
+				context.Out << label << ": error: " << step.Result.Message << '\n';
 			}
-			if (!result.Ok)
+			for (const std::string& warning : step.Result.Warnings)
 			{
-				++failed;
-				exitCode = std::max(exitCode, GetExitCode(result));
-				if (!options.KeepGoing)
-				{
-					stopped = true;
-					break;
-				}
+				context.Err << "warning: " << warning << '\n';
 			}
-		}
+		};
+		const BatchSummary summary =
+			RunCommandBatch(m_Registry, editor, text, BatchOptions{ .KeepGoing = options.KeepGoing }, print);
 
-		// A batch that stopped at a failure saves nothing: it either happened as a whole or not at all (apart from the
-		// files that commands write right away).
-		std::vector<std::string> saved;
+		size_t failed = summary.Failed;
 		std::string saveNote;
-		if (stopped)
+		switch (summary.Saving)
 		{
-			saveNote = "nothing was saved because a command failed (--keep-going continues and saves)";
-		}
-		else if (options.DryRun)
-		{
-			saveNote = "dry run: nothing was saved";
-		}
-		else if (Result<std::vector<std::string>> written = editor.SaveAll(); written)
-		{
-			saved = std::move(*written);
-		}
-		else
-		{
-			saveNote = std::format("cannot save: {}", written.GetError().Message);
-			exitCode = std::max(exitCode, ExitFailure);
-			++failed;
+			case BatchSaving::Saved:
+				break;
+			case BatchSaving::Stopped:
+				saveNote = "nothing was saved because a command failed (--keep-going continues and saves)";
+				break;
+			case BatchSaving::DryRun:
+				saveNote = "dry run: nothing was saved";
+				break;
+			case BatchSaving::Failed:
+				saveNote = std::format("cannot save: {}", summary.SaveError->Message);
+				exitCode = std::max(exitCode, ExitFailure);
+				++failed;
+				break;
 		}
 
 		if (options.AsJson)
 		{
-			Json summary = Json::object();
-			summary["executed"] = executed;
-			summary["failed"] = failed;
-			summary["saved"] = saved;
+			Json result = Json::object();
+			result["executed"] = summary.Executed;
+			result["failed"] = failed;
+			result["saved"] = summary.Saved;
 			if (!saveNote.empty())
 			{
-				summary["note"] = saveNote;
+				result["note"] = saveNote;
+			}
+			if (!loadWarnings.empty())
+			{
+				result["warnings"] = loadWarnings;
 			}
 			Json document = Json::object();
-			document["summary"] = std::move(summary);
+			document["summary"] = std::move(result);
 			context.Out << Compact(document) << '\n';
 		}
 		else
 		{
-			context.Out << executed << (executed == 1 ? " command" : " commands") << ", " << failed << " failed";
-			for (const std::string& path : saved)
+			context.Out << summary.Executed << (summary.Executed == 1 ? " command" : " commands") << ", " << failed
+						<< " failed";
+			for (const std::string& path : summary.Saved)
 			{
 				context.Out << "; saved " << path;
 			}

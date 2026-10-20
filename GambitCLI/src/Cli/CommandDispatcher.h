@@ -55,8 +55,9 @@ namespace Gambit::Cli
 		virtual void PrintCommandList(std::ostream& out) const = 0;
 	};
 
-	// Maps `gambit <command> ...` to handlers and provides the built-in `help` command. Later tasks add their
-	// commands in RegisterBuiltinCommands; the dispatcher itself does not change.
+	// Maps `gambit <command> ...` to handlers and provides the built-in `help` command. Commands with one-word names
+	// are registered by name (RegisterBuiltinCommands, and `batch` and `commands` in RegisterAutomationCommands);
+	// everything else goes to the providers, such as the AutomationProvider that runs the command registry.
 	class CommandDispatcher
 	{
 	public:
@@ -89,6 +90,7 @@ namespace Gambit::Cli
 		std::vector<Ref<ICommandProvider>> m_Providers;
 	};
 
-	// Registers every command the gambit tool ships with (currently `version`).
+	// Registers the commands of the tool itself (`version`); the automation commands come from
+	// RegisterAutomationCommands (Cli/AutomationCommands.h).
 	void RegisterBuiltinCommands(CommandDispatcher& dispatcher);
 }

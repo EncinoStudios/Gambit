@@ -98,6 +98,29 @@ namespace Gambit
 			}
 		}
 
+		constexpr double TwoToThe63 = 9223372036854775808.0;
+
+		bool IsWholeNumber(double value) noexcept
+		{
+			return std::isfinite(value) && value == std::floor(value);
+		}
+
+		std::string FormatJsonNumber(const Json& value)
+		{
+			if (value.is_number_unsigned())
+			{
+				return std::format("{}", value.get<uint64_t>());
+			}
+			if (value.is_number_integer())
+			{
+				return std::format("{}", value.get<int64_t>());
+			}
+			const double number = value.get<double>();
+			// Integers given as floats beyond 2^63 are exact as written by "{:.0f}".
+			return IsWholeNumber(number) && std::fabs(number) < 1.0e21 ? std::format("{:.0f}", number)
+																	   : FormatNumber(number);
+		}
+
 		std::string JoinNames(const std::vector<std::string>& names)
 		{
 			std::string joined;
@@ -148,16 +171,35 @@ namespace Gambit
 					return value;
 				case ArgumentType::Integer:
 				{
-					const Result<int64_t> integer = ReadJsonInteger<int64_t>(value, {});
-					if (!integer)
+					// Integers are int64 values; those above INT64_MAX (64-bit seeds) only when the maximum of the
+					// argument allows them (UnsignedArg), since handlers read the others as int64.
+					if (const Result<int64_t> integer = ReadJsonInteger<int64_t>(value, {}); integer)
 					{
-						return mismatch();
+						if (Result<void> inRange = checkRange(static_cast<double>(*integer)); !inRange)
+						{
+							return inRange.GetError();
+						}
+						return Json(*integer);
 					}
-					if (Result<void> inRange = checkRange(static_cast<double>(*integer)); !inRange)
+					const Result<uint64_t> large = ReadJsonInteger<uint64_t>(value, {});
+					const bool allowsLarge = argument.Maximum.has_value() && *argument.Maximum >= TwoToThe63;
+					if (large && allowsLarge)
 					{
-						return inRange.GetError();
+						if (Result<void> inRange = checkRange(static_cast<double>(*large)); !inRange)
+						{
+							return inRange.GetError();
+						}
+						return Json(*large);
 					}
-					return Json(*integer);
+					if (value.is_number_integer() || (value.is_number_float() && IsWholeNumber(value.get<double>())))
+					{
+						return Error::Format(
+							"argument '{}': {} is out of range{}", label, FormatJsonNumber(value),
+							argument.Maximum.has_value()
+								? std::format(" (the maximum is {})", FormatNumber(*argument.Maximum))
+								: std::string(" for a 64-bit integer"));
+					}
+					return mismatch();
 				}
 				case ArgumentType::Number:
 					if (!value.is_number())
@@ -269,6 +311,15 @@ namespace Gambit
 			                 .Description = std::move(description) };
 	}
 
+	ArgumentInfo UnsignedArg(std::string name, std::string description)
+	{
+		return ArgumentInfo{ .Name = std::move(name),
+			                 .Type = ArgumentType::Integer,
+			                 .Description = std::move(description),
+			                 .Minimum = 0.0,
+			                 .Maximum = MaxUnsignedArgument };
+	}
+
 	ArgumentInfo NumberArg(std::string name, std::string description)
 	{
 		return ArgumentInfo{ .Name = std::move(name),
@@ -336,6 +387,10 @@ namespace Gambit
 
 	std::string FormatNumber(double value)
 	{
+		if (value == MaxUnsignedArgument)
+		{
+			return "18446744073709551615"; // the limit of UnsignedArg, 2^64 - 1, which is 2^64 as a double
+		}
 		if (std::isfinite(value) && value == std::floor(value) && std::fabs(value) < 1.0e15)
 		{
 			return std::format("{}", static_cast<int64_t>(value));
@@ -456,7 +511,8 @@ namespace Gambit
 			{
 				property["description"] = argument.Description;
 			}
-			if (!argument.Enum.empty())
+			// The enum of an array of strings restricts its elements, so it belongs to "items".
+			if (!argument.Enum.empty() && argument.Type != ArgumentType::Array)
 			{
 				property["enum"] = argument.Enum;
 			}
@@ -468,6 +524,10 @@ namespace Gambit
 			{
 				Json items = Json::object();
 				items["type"] = JsonSchemaType(argument.ItemType);
+				if (!argument.Enum.empty())
+				{
+					items["enum"] = argument.Enum;
+				}
 				property["items"] = std::move(items);
 			}
 			if (argument.Minimum.has_value())

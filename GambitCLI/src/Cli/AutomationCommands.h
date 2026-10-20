@@ -46,9 +46,11 @@ namespace Gambit::Cli
 		[[nodiscard]] int RunCommand(
 			const ResolvedCommand& command, const SplitCommandLine& line, std::span<const std::string> options,
 			const CommandContext& context);
-		// Opens the project and scene that the options and the commands to run call for.
-		[[nodiscard]] Result<void>
-		PrepareContext(EditorContext& context, const GlobalOptions& options, bool needsProject, bool needsScene) const;
+		// Opens the project and scene that the options and the commands to run call for. What the loads of scenes
+		// could not read goes to `warnings`.
+		[[nodiscard]] Result<void> PrepareContext(
+			EditorContext& context, const GlobalOptions& options, bool needsProject, bool needsScene,
+			std::vector<std::string>& warnings) const;
 
 		std::string m_ProgramName;
 		TypeRegistry& m_Types;

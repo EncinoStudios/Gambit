@@ -66,9 +66,11 @@ namespace Gambit
 	BulkTableFromCsv(const ComponentInfo& component, std::string_view csv, std::string_view source);
 
 	// Applies the cells to the scene as edits of the component: struct cells merge into the current value, cells that
-	// equal the current value change nothing, read-only cells may only repeat their value. Everything is checked before
-	// the first change; the changes are done through the undo stack (one entry per entity that changes - group them
-	// with UndoStack::BeginGroup). Returns the number of entities changed.
+	// equal the current value change nothing, read-only cells (and read-only struct members) may only repeat their
+	// value. Everything is checked before the first change; the changes are done through the undo stack (one entry per
+	// entity that changes, pushed with `mergeKey` - group them with UndoStack::BeginGroup). Returns the number of
+	// entities changed.
 	[[nodiscard]] Result<size_t> ApplyBulkTable(
-		EditorContext& context, SceneDocument& scene, const ComponentInfo& component, const BulkTable& table);
+		EditorContext& context, SceneDocument& scene, const ComponentInfo& component, const BulkTable& table,
+		std::string_view mergeKey = {});
 }

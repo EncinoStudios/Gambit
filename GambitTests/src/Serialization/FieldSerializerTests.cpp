@@ -416,7 +416,8 @@ namespace
 	std::string MergeError(const FieldInfo& field, const FieldValue& current, const Json& json)
 	{
 		LoadReport report;
-		const Result<FieldValue> merged = FieldValueMergeFromJson(field, current, json, "/Value", report);
+		const Result<FieldValue> merged =
+			FieldValueMergeFromJson(field, current, json, "/Value", report, MergeAccess::Code);
 		REQUIRE_FALSE(merged.HasValue());
 		return merged.GetError().Message;
 	}
@@ -424,8 +425,8 @@ namespace
 	FieldValue Merge(const FieldInfo& field, const FieldValue& current, const Json& json, LoadReport* report = nullptr)
 	{
 		LoadReport local;
-		const Result<FieldValue> merged =
-			FieldValueMergeFromJson(field, current, json, "/Value", report != nullptr ? *report : local);
+		const Result<FieldValue> merged = FieldValueMergeFromJson(
+			field, current, json, "/Value", report != nullptr ? *report : local, MergeAccess::Code);
 		REQUIRE_MESSAGE(merged.HasValue(), (merged.HasValue() ? std::string() : merged.GetError().Message));
 		return *merged;
 	}
@@ -518,6 +519,57 @@ TEST_CASE("Serialization: merging arrays of structs merges element by element")
 	CHECK(result.Layers[2].Weight == 0.1f);
 
 	CHECK(write(Merge(layers, current, Json::array())).Layers.empty());
+}
+
+namespace
+{
+	struct SealedStats
+	{
+		int32_t Level = 1;
+		int32_t Serial = 7; // read-only: tools show it, code writes it
+	};
+
+	struct SealedComponent
+	{
+		SealedStats Stats;
+		std::vector<SealedStats> History{ SealedStats{} };
+	};
+}
+
+TEST_CASE("Serialization: a merge for tools refuses to change read-only struct members")
+{
+	TypeRegistry registry;
+	RegisterEngineTypes(registry);
+	registry.RegisterStruct<SealedStats>("SealedStats")
+		.Field("Level", &SealedStats::Level)
+		.Field("Serial", &SealedStats::Serial, Attr::ReadOnly{});
+	registry.RegisterComponent<SealedComponent>("Sealed")
+		.Field("Stats", &SealedComponent::Stats)
+		.Field("History", &SealedComponent::History);
+	const ComponentInfo& sealed = registry.GetComponent<SealedComponent>();
+	const FieldInfo& stats = *sealed.FindField("Stats");
+	const FieldInfo& history = *sealed.FindField("History");
+
+	const auto merge = [](const FieldInfo& field, const Json& json, MergeAccess access) {
+		LoadReport report;
+		return FieldValueMergeFromJson(field, field.Default, json, "/Value", report, access);
+	};
+	const Result<FieldValue> refused = merge(stats, Json::parse(R"({"Serial": 8})"), MergeAccess::Tool);
+	REQUIRE_FALSE(refused.HasValue());
+	CHECK(refused.GetError().Message == "/Value/Serial: the field 'Serial' is read-only");
+	const Result<FieldValue> inArray = merge(history, Json::parse(R"([{}, {"Serial": 9}])"), MergeAccess::Tool);
+	REQUIRE_FALSE(inArray.HasValue());
+	CHECK(inArray.GetError().Message == "/Value/1/Serial: the field 'Serial' is read-only");
+
+	// Repeating the current value is no change; the other members merge as usual.
+	const Result<FieldValue> repeated = merge(stats, Json::parse(R"({"Serial": 7, "Level": 4})"), MergeAccess::Tool);
+	REQUIRE(repeated.HasValue());
+	CHECK(std::get<StructValue>(*repeated).Values[0] == FieldValue(int32_t{ 4 }));
+
+	// Code may write it.
+	const Result<FieldValue> written = merge(stats, Json::parse(R"({"Serial": 8})"), MergeAccess::Code);
+	REQUIRE(written.HasValue());
+	CHECK(std::get<StructValue>(*written).Values[1] == FieldValue(int32_t{ 8 }));
 }
 
 TEST_CASE("Serialization: merging reports unknown members and mistakes with their path")

@@ -409,7 +409,8 @@ namespace Gambit::Commands
 		                       StringArg("component", "Component type name (kind Component)"),
 		                       StringArg("asset", "Asset project path or handle (kind Asset)"),
 		                       StringArg("file", "Project file path (kind File)"),
-		                       IntegerArg("line", "Line of the file, from 1 (kind File)").WithMinimum(1),
+		                       IntegerArg("line", "Line of the file, from 1 (kind File)")
+		                           .WithRange(1, std::numeric_limits<uint32_t>::max()),
 		                       StringArg("feature", "Free tag of the feature or topic (kind Feature)"),
 		                       ArrayArg("position", ArgumentType::Number, "World position [x, y, z] (kind Position)"),
 		                       author },

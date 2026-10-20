@@ -621,8 +621,9 @@ namespace Gambit
 
 	// ---- Applying ----
 
-	Result<size_t>
-	ApplyBulkTable(EditorContext& context, SceneDocument& scene, const ComponentInfo& component, const BulkTable& table)
+	Result<size_t> ApplyBulkTable(
+		EditorContext& context, SceneDocument& scene, const ComponentInfo& component, const BulkTable& table,
+		std::string_view mergeKey)
 	{
 		World& world = *scene.Scene;
 		struct RowEdit
@@ -662,8 +663,8 @@ namespace Gambit
 					return UnknownField(component, table.Columns[column].Name);
 				}
 				const FieldValue now = field->GetValue(current);
-				Result<FieldValue> merged =
-					FieldValueMergeFromJson(*field, now, row.Values[column], JsonPathAppend({}, field->Name), report);
+				Result<FieldValue> merged = FieldValueMergeFromJson(
+					*field, now, row.Values[column], JsonPathAppend({}, field->Name), report, MergeAccess::Tool);
 				if (!merged)
 				{
 					return Invalid(std::format("{}: {}", where, merged.GetError().Message));
@@ -692,9 +693,11 @@ namespace Gambit
 		for (RowEdit& edit : plan)
 		{
 			const Entity entity = world.TryGetEntity(edit.Entity);
-			if (Result<void> done = context.Do(CreateScope<SetFieldsOperation>(
-					scene.Path, edit.Entity, component.GetName(), std::move(edit.Edits),
-					std::format("Edit {} of '{}'", component.GetName(), entity.GetName())));
+			if (Result<void> done = context.Do(
+					CreateScope<SetFieldsOperation>(
+						scene.Path, edit.Entity, component.GetName(), std::move(edit.Edits),
+						std::format("Edit {} of '{}'", component.GetName(), entity.GetName())),
+					mergeKey);
 			    !done)
 			{
 				return done.GetError();

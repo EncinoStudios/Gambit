@@ -68,6 +68,33 @@ namespace Gambit
 				}
 			}
 
+			// Another group of the same shape whose children each merge into this group's child at their position.
+			bool CanMerge(const IUndoableOperation& later) const override
+			{
+				const auto* next = dynamic_cast<const GroupOperation*>(&later);
+				if (next == nullptr || next->m_Children.size() != m_Children.size())
+				{
+					return false;
+				}
+				for (size_t index = 0; index < m_Children.size(); ++index)
+				{
+					if (!m_Children[index]->CanMerge(*next->m_Children[index]))
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+
+			void Merge(const IUndoableOperation& later) override
+			{
+				const auto& next = static_cast<const GroupOperation&>(later);
+				for (size_t index = 0; index < m_Children.size(); ++index)
+				{
+					m_Children[index]->Merge(*next.m_Children[index]);
+				}
+			}
+
 		private:
 			// The child at `position` failed: best effort to put the children that had already been changed back (those
 			// before it after a failed Redo, those after it after a failed Undo), so that the failure leaves the
@@ -133,8 +160,9 @@ namespace Gambit
 			}
 		}
 		if (!entry.MergeKey.empty() && m_CanMerge && !m_Undo.empty() && m_Undo.back().MergeKey == entry.MergeKey
-		    && m_Undo.back().Operation->TryMerge(*entry.Operation))
+		    && m_Undo.back().Operation->CanMerge(*entry.Operation))
 		{
+			m_Undo.back().Operation->Merge(*entry.Operation);
 			return;
 		}
 		Adjust(*entry.Operation, 1);
@@ -281,6 +309,11 @@ namespace Gambit
 		}
 		else
 		{
+			// Operations that were all pushed with one key make a group that merges with the next one like it.
+			const std::string& key = group.Entries.front().MergeKey;
+			const bool sameKey =
+				std::ranges::all_of(group.Entries, [&](const Entry& child) { return child.MergeKey == key; });
+			entry.MergeKey = sameKey ? key : std::string();
 			std::vector<Scope<IUndoableOperation>> children;
 			children.reserve(group.Entries.size());
 			for (Entry& child : group.Entries)

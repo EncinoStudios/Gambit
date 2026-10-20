@@ -15,9 +15,11 @@ namespace Gambit::Commands
 			World* world = context.GetActiveScene() != nullptr ? context.GetActiveScene()->Scene.get() : nullptr;
 			for (const UUID uuid : context.GetSelection())
 			{
+				// The selection should only hold entities of the active scene; one that is gone has no name.
+				const Entity entity = world != nullptr ? world->TryGetEntity(uuid) : Entity();
 				Json entry = Json::object();
 				entry["uuid"] = uuid.ToString();
-				entry["name"] = world != nullptr ? world->TryGetEntity(uuid).GetName() : std::string();
+				entry["name"] = entity.IsValid() ? Json(entity.GetName()) : Json(nullptr);
 				entities.push_back(std::move(entry));
 			}
 			Json data = Json::object();
@@ -97,6 +99,8 @@ namespace Gambit::Commands
 				const std::string description = undo ? stack.GetUndoDescription() : stack.GetRedoDescription();
 				if (Result<void> result = undo ? stack.Undo(context) : stack.Redo(context); !result)
 				{
+					// The steps before, or a partial rollback of this one, may have removed selected entities.
+					PruneSelection(context);
 					return Fail(result.GetError(), CommandErrorCode::Conflict);
 				}
 				done.push_back(description);

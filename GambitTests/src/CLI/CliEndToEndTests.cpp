@@ -67,6 +67,8 @@ namespace
 			INFO("start error: ", run.Process.StartError);
 			REQUIRE(run.Process.Started);
 			CHECK_FALSE(run.Process.TimedOut);
+			INFO("wait error: ", run.Process.WaitError);
+			REQUIRE(run.Process.WaitError.empty()); // else ExitCode means nothing
 			return run;
 		}
 
@@ -288,11 +290,4 @@ TEST_CASE("CLI: gambit batch, sim run and the command list work as processes" * 
 		"\n");
 	CHECK(failing.ExitCode() == 1);
 	CHECK(ReadTextFile(gambit.ProjectDirectory() / "Scenes" / "Main.gscene") == before);
-}
-
-TEST_CASE("Tests: RunProcess reports a program that cannot start")
-{
-	const ProcessResult result = RunProcess(std::filesystem::path("definitely") / "not" / "a" / "program", {});
-	CHECK_FALSE(result.Started);
-	CHECK_FALSE(result.StartError.empty());
 }

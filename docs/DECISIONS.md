@@ -349,3 +349,11 @@ assets and is never exported. `GAMBIT_AUTHOR` names the author on the command li
 **D-057 Struct infos belong to the registry (T06).** `FieldAttributes::Struct` is a non-owning pointer to a `StructInfo`
 that the `TypeRegistry` owns and outlives, so a struct can hold a `std::vector` of itself (blend trees) without a reference
 cycle that would never be freed.
+
+## Process
+
+**D-090 Checkpointed delivery.** The dev container is ephemeral and unpushed work has been lost, so: tasks run one
+at a time on the feature branch; the implementer self-reviews (code-review skill) and pushes every green checkpoint
+at once; the independent review follows on the pushed commits and lands as `<ID> review:` commits. ROADMAP status
+is `review` after implementation and `done` only after the independent review. The feature branch stays green at
+every pushed commit; nothing reaches `main` without the full review.

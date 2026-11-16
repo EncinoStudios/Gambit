@@ -18,7 +18,7 @@ this way). So work in small green steps and push each one.
    running log of what is done and what remains in `docs/tasks/<ID>-notes.md` and commit it with each checkpoint,
    so a successor can continue. Never leave more than about an hour of work unpushed. Every commit message ends with:
    ```
-   Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
    Claude-Session: https://claude.ai/code/session_018Lf3htvbUciiJb4XMkzaDJ
    ```
 4. **Build quietly** with the scripts (4 CPUs, `-j4` at most, one build at a time). Disk is limited: keep the GCC

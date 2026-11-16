@@ -27,6 +27,14 @@ namespace Gambit
 
 		// Vec2, Vec3, Vec4, Quat, Color, Mat4 and Math. MathBindings.cpp.
 		void RegisterMathApi(ApiRegistry& registry);
+		// Component, System, Test and the field type constructors (Int, Enum, Array, ...). DeclarationBindings.cpp.
+		void RegisterDeclarationApi(ApiRegistry& registry);
+		// The proxies of components, structs and arrays. ComponentBindings.cpp.
+		void RegisterComponentApi(ApiRegistry& registry);
+		// Entity. EntityBindings.cpp.
+		void RegisterEntityApi(ApiRegistry& registry);
+		// World. WorldBindings.cpp.
+		void RegisterWorldApi(ApiRegistry& registry);
 		// SortedPairs and Table, the engine Lua library (Gambit/Lua). LibraryApi.cpp.
 		void RegisterLibraryApi(ApiRegistry& registry);
 

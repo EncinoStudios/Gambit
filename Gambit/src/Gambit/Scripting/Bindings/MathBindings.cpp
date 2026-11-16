@@ -105,7 +105,7 @@ namespace Gambit::Bindings
 			{
 				type[Axes[static_cast<size_t>(index)]] = sol::property(
 					[index](const S& self) { return static_cast<double>(self.Get()[index]); },
-					[index](S& self, double value) { self.Value[index] = static_cast<float>(value); });
+					[index](S& self, double value) { self.SetComponent(index, static_cast<float>(value)); });
 			}
 
 			type["Dot"] = [](const S& a, const S& b) { return static_cast<double>(glm::dot(a.Get(), b.Get())); };
@@ -200,7 +200,7 @@ namespace Gambit::Bindings
 			{
 				type[Axes[static_cast<size_t>(index)]] = sol::property(
 					[index](const S& self) { return static_cast<double>(self.Get()[index]); },
-					[index](S& self, double value) { self.Value[index] = static_cast<float>(value); });
+					[index](S& self, double value) { self.SetComponent(index, static_cast<float>(value)); });
 			}
 
 			type["AngleAxis"] = [](double angle, const ScriptVec3& axis) {
@@ -225,8 +225,11 @@ namespace Gambit::Bindings
 				}
 				return S{ DMath::QuatFromEuler(angles) };
 			};
-			type["LookRotation"] = [](const ScriptVec3& forward, sol::optional<ScriptVec3> up) {
-				return S{ LookRotation(forward.Get(), up.has_value() ? up->Get() : glm::vec3(0.0f, 1.0f, 0.0f)) };
+			type["LookRotation"] = [](const ScriptVec3& forward, sol::object up) {
+				const std::optional<ScriptVec3> upward =
+					GetOptionalArgument<ScriptVec3>(up, "Quat.LookRotation: up", "a Vec3");
+				return S{ LookRotation(
+					forward.Get(), upward.has_value() ? upward->Get() : glm::vec3(0.0f, 1.0f, 0.0f)) };
 			};
 			type["Slerp"] = [](const S& a, const S& b, double t) {
 				return S{ DMath::Slerp(a.Get(), b.Get(), static_cast<float>(t)) };
@@ -269,7 +272,7 @@ namespace Gambit::Bindings
 			{
 				type[Channels[static_cast<size_t>(index)]] = sol::property(
 					[index](const S& self) { return static_cast<double>(self.Get()[index]); },
-					[index](S& self, double value) { self.Value[index] = static_cast<float>(value); });
+					[index](S& self, double value) { self.SetComponent(index, static_cast<float>(value)); });
 			}
 			type["Lerp"] = [](const S& a, const S& b, double t) {
 				const glm::vec4 from = a.Get();

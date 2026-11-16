@@ -12,6 +12,10 @@ namespace Gambit
 	{
 		Bindings::RegisterSandboxApi(registry);
 		Bindings::RegisterMathApi(registry);
+		Bindings::RegisterDeclarationApi(registry);
+		Bindings::RegisterComponentApi(registry);
+		Bindings::RegisterEntityApi(registry);
+		Bindings::RegisterWorldApi(registry);
 		Bindings::RegisterLibraryApi(registry);
 	}
 }

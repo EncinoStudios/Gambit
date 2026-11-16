@@ -4,7 +4,8 @@
 #include "Gambit/Scripting/LuaBindings.h"
 
 // Plain data between Lua and the engine (ScriptValue). Only the raw Lua API is used here (lua_next, lua_to*), which
-// never raises an error, so C++ objects may live across the calls.
+// never raises an error, so C++ objects may live across the calls. Reading a bound value whose field is gone throws a
+// ScriptException, which ReadScriptValue turns into an error.
 
 namespace Gambit::Bindings
 {
@@ -98,6 +99,10 @@ namespace Gambit::Bindings
 					{
 						return ScriptValue(ScriptColorValue{ sol::stack::get<ScriptColor&>(lua, index).Get() });
 					}
+					if (IsUserdataOf<ScriptEntity>(lua, index))
+					{
+						return ScriptValue(ScriptEntityValue{ sol::stack::get<ScriptEntity&>(lua, index).Id });
+					}
 					break;
 				default:
 					break;
@@ -108,6 +113,15 @@ namespace Gambit::Bindings
 
 	Result<ScriptValue> ReadScriptValue(lua_State* lua, int index)
 	{
-		return Read(lua, lua_absindex(lua, index), 0);
+		const int top = lua_gettop(lua);
+		try
+		{
+			return Read(lua, lua_absindex(lua, index), 0);
+		}
+		catch (const ScriptException& exception) // a bound value whose entity is gone
+		{
+			lua_settop(lua, top);
+			return Error(exception.what());
+		}
 	}
 }

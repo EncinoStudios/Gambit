@@ -14,35 +14,6 @@
 using namespace Gambit;
 using namespace Gambit::Tests;
 
-namespace
-{
-	std::vector<std::string> Strings(const ScriptValue& value)
-	{
-		std::vector<std::string> strings;
-		if (const ScriptTable* table = value.TryGet<ScriptTable>(); table != nullptr)
-		{
-			for (const ScriptTableEntry& entry : *table)
-			{
-				if (const std::string* text = entry.Value.TryGet<std::string>(); text != nullptr)
-				{
-					strings.push_back(*text);
-				}
-			}
-		}
-		return strings;
-	}
-
-	double Number(const ScriptValue& value)
-	{
-		if (const double* number = value.TryGet<double>(); number != nullptr)
-		{
-			return *number;
-		}
-		REQUIRE(value.Is<int64_t>());
-		return static_cast<double>(*value.TryGet<int64_t>());
-	}
-}
-
 TEST_CASE("Scripting: the sandbox has no unsafe or non-deterministic libraries")
 {
 	ScriptFixture fixture;

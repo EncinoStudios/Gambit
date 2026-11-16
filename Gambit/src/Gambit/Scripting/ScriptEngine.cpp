@@ -4,11 +4,15 @@
 
 #include "Gambit/Core/VFS.h"
 #include "Gambit/ECS/World.h"
+#include "Gambit/Input/InputSource.h"
+#include "Gambit/Input/InputState.h"
 #include "Gambit/Math/Random.h"
 #include "Gambit/Reflection/TypeRegistry.h"
+#include "Gambit/Scripting/Bindings/BindingSupport.h"
 #include "Gambit/Scripting/Bindings/CoreBindings.h"
 #include "Gambit/Scripting/LuaBindings.h"
 #include "Gambit/Scripting/LuaLibrary.h"
+#include "Gambit/Scripting/ScriptSystem.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -32,6 +36,9 @@ namespace Gambit
 			Random OwnRandom;
 			std::vector<ScriptError> Errors;
 			std::string Warning; // the pieces of a warning so far
+			Bindings::ScriptDeclarations Declarations;
+			InputState Input;
+			InputSource* Source = nullptr;
 		};
 	}
 
@@ -46,7 +53,6 @@ namespace Gambit
 		constexpr const char* LoadedKey = "Gambit.Loaded";       // module name -> value, or LoadingMarker
 		constexpr const char* TracebackKey = "Gambit.Traceback"; // of the latest error
 		constexpr const char* FreezeKey = "Gambit.Freeze";       // the function that freezes the globals
-		constexpr const char* WorldKey = "Gambit.World";         // the world object, set by the World binder
 		constexpr const char* LoadingMarker = "Gambit.Loading";  // a light userdata: the module is being loaded
 
 		ScriptEngineState& GetState(lua_State* lua) noexcept
@@ -695,6 +701,25 @@ end
 		return *GetState(state).Owner;
 	}
 
+	ScriptLocation GetCallerLocation(lua_State* state)
+	{
+		lua_Debug frame;
+		for (int level = 1; lua_getstack(state, level, &frame) != 0; ++level)
+		{
+			lua_getinfo(state, "Sl", &frame);
+			if (frame.currentline > 0)
+			{
+				return ScriptLocation{ frame.short_src, frame.currentline };
+			}
+		}
+		return {};
+	}
+
+	Bindings::ScriptDeclarations& Bindings::GetDeclarations(ScriptEngine& engine)
+	{
+		return GetState(engine.GetLuaState()).Declarations;
+	}
+
 	Result<void>
 	CallScriptFunction(ScriptEngine& engine, int argumentCount, int resultCount, std::string_view context, bool record)
 	{
@@ -719,12 +744,14 @@ end
 		{
 			spec.Api = &ApiRegistry::Get();
 		}
+		m_State->Input.SetActions(spec.Actions);
 	}
 
 	ScriptEngine::~ScriptEngine()
 	{
 		if (m_State->Lua != nullptr)
 		{
+			m_State->Declarations = {}; // its references into the state go first
 			lua_close(m_State->Lua);
 		}
 	}
@@ -926,7 +953,7 @@ end
 			lua_pop(lua, 1);
 			return Error(std::move(message));
 		}
-		lua_getfield(lua, LUA_REGISTRYINDEX, WorldKey);
+		lua_getfield(lua, LUA_REGISTRYINDEX, Bindings::WorldObjectKey);
 		const int argumentCount = lua_isnil(lua, -1) ? 0 : 1;
 		if (argumentCount == 0)
 		{
@@ -939,6 +966,85 @@ end
 		Result<ScriptValue> value = Bindings::ReadScriptValue(lua, -1);
 		lua_pop(lua, 1);
 		return value;
+	}
+
+	std::span<const ScriptComponentDeclaration> ScriptEngine::GetComponents() const noexcept
+	{
+		return m_State->Declarations.Components;
+	}
+
+	std::span<const ScriptSystemDeclaration> ScriptEngine::GetSystems() const noexcept
+	{
+		return m_State->Declarations.Systems;
+	}
+
+	std::span<const ScriptTestDeclaration> ScriptEngine::GetTests() const noexcept
+	{
+		return m_State->Declarations.Tests;
+	}
+
+	// ---- Simulation ----
+
+	Result<void> ScriptEngine::AttachToWorld()
+	{
+		ScriptEngineState& state = *m_State;
+		World* world = state.Specification.Scene;
+		if (state.Specification.Mode != ScriptMode::Simulation || world == nullptr)
+		{
+			return Error("only a simulation script engine attaches to a world");
+		}
+		if (!state.Frozen)
+		{
+			return Error("attach the script engine after its scripts are loaded (FinishLoading)");
+		}
+		SystemScheduler& scheduler = world->GetScheduler();
+		if (scheduler.FindSystem(ScriptRuntimeSystem::Name) != nullptr)
+		{
+			return Error("the world has a script engine already");
+		}
+		for (const ScriptSystemDeclaration& system : state.Declarations.Systems)
+		{
+			if (scheduler.FindSystem(system.Name) != nullptr)
+			{
+				return Error::Format(
+					"the script system '{}' ({}:{}) has the name of a system the world has already", system.Name,
+					system.Location.File, system.Location.Line);
+			}
+		}
+		const Ref<ScriptEngine> self = shared_from_this();
+		if (Result<void> added = scheduler.AddSystem(CreateScope<ScriptRuntimeSystem>(self)); !added)
+		{
+			return added;
+		}
+		for (size_t index = 0; index < state.Declarations.Systems.size(); ++index)
+		{
+			if (Result<void> added = scheduler.AddSystem(CreateScope<ScriptSystem>(self, index)); !added)
+			{
+				return added;
+			}
+		}
+		return {};
+	}
+
+	ScriptEngine* ScriptEngine::Find(World& world)
+	{
+		auto* runtime = dynamic_cast<ScriptRuntimeSystem*>(world.GetScheduler().FindSystem(ScriptRuntimeSystem::Name));
+		return runtime != nullptr ? &runtime->GetEngine() : nullptr;
+	}
+
+	void ScriptEngine::SetInputSource(InputSource* source) noexcept
+	{
+		m_State->Source = source;
+	}
+
+	InputSource* ScriptEngine::GetInputSource() const noexcept
+	{
+		return m_State->Source;
+	}
+
+	InputState& ScriptEngine::GetInput() noexcept
+	{
+		return m_State->Input;
 	}
 
 	// ---- State ----

@@ -2,11 +2,15 @@
 
 #include "Gambit/Core/Base.h"
 #include "Gambit/Core/Result.h"
+#include "Gambit/ECS/System.h"
+#include "Gambit/Input/InputActions.h"
 #include "Gambit/Scripting/ApiRegistry.h"
 #include "Gambit/Scripting/ScriptValue.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -16,6 +20,8 @@ struct lua_State;
 
 namespace Gambit
 {
+	class InputSource;
+	class InputState;
 	class Random;
 	class TypeRegistry;
 	class VFS;
@@ -44,6 +50,41 @@ namespace Gambit
 		uint64_t InstructionsPerCall = 50'000'000;
 	};
 
+	// A line of a script.
+	struct ScriptLocation
+	{
+		std::string File; // "Scripts/Spin.lua"; empty when unknown
+		int32_t Line = 0; // 0 when unknown
+	};
+
+	// A component a script declared with Component(name, fields) (D-023); the schema itself is in the TypeRegistry.
+	struct ScriptComponentDeclaration
+	{
+		std::string Name;
+		ScriptLocation Location;
+	};
+
+	// A system a script declared with System(name, { Phase, Order, OnCreate, OnUpdate, OnDestroy, RunInEditMode }).
+	struct ScriptSystemDeclaration
+	{
+		std::string Name;
+		SystemPhase Phase = SystemPhase::Update;
+		int32_t Order = 0;
+		bool RunInEditMode = false;
+		ScriptLocation Location;
+	};
+
+	// A test a script declared with Test(name, { Run, Scene, Tags, Timeout, Seed }); the test runner (T12) runs it.
+	struct ScriptTestDeclaration
+	{
+		std::string Name;
+		std::string Scene; // empty: an empty world
+		std::vector<std::string> Tags;
+		std::optional<uint64_t> Timeout; // ticks
+		std::optional<uint64_t> Seed;
+		ScriptLocation Location;
+	};
+
 	// A script failure: where and what. Errors are logged when they happen and kept by the engine.
 	struct ScriptError
 	{
@@ -68,6 +109,8 @@ namespace Gambit
 		// runs source text).
 		const VFS* Files = nullptr;
 		std::string ScriptsDirectory = "Scripts";
+		// The project's input mapping, which Lua's Input functions read; null: no actions.
+		Ref<const InputActions> Actions;
 		ScriptLimits Limits;
 		// The API to bind; ApiRegistry::Get() when null. Must outlive the engine.
 		const ApiRegistry* Api = nullptr;
@@ -88,7 +131,7 @@ namespace Gambit
 	// Every call into Lua is protected: an error never escapes into the engine. It is recorded with its location
 	// (GetErrors), logged, and returned as a Result. A memory limit and an instruction watchdog per call stop runaway
 	// scripts the same way.
-	class ScriptEngine
+	class ScriptEngine : public std::enable_shared_from_this<ScriptEngine>
 	{
 		struct ConstructionKey
 		{
@@ -124,6 +167,28 @@ namespace Gambit
 		// world object as its argument (`local world = ...`) when the engine has a world. Errors are returned, not
 		// recorded.
 		[[nodiscard]] Result<ScriptValue> Evaluate(std::string_view code, std::string_view chunkName = "=(evaluate)");
+
+		// What the loaded scripts declared, in declaration order.
+		[[nodiscard]] std::span<const ScriptComponentDeclaration> GetComponents() const noexcept;
+		[[nodiscard]] std::span<const ScriptSystemDeclaration> GetSystems() const noexcept;
+		[[nodiscard]] std::span<const ScriptTestDeclaration> GetTests() const noexcept;
+
+		// ---- Simulation ----
+
+		// Adds the engine's systems to its world (simulation mode, after FinishLoading): "ScriptRuntime" (first of the
+		// Input phase: it owns the engine for the world and feeds the tick's input) and one ScriptSystem per declared
+		// system, whose OnCreate runs now. The world then keeps the engine alive. Fails when a system cannot be added
+		// (its name is taken); OnCreate errors disable their system and are recorded, they do not fail this.
+		[[nodiscard]] Result<void> AttachToWorld();
+		// The engine attached to `world`, null when there is none.
+		[[nodiscard]] static ScriptEngine* Find(World& world);
+
+		// Where the input of each Play tick comes from: ScriptRuntime samples it once per tick. Null (the default): no
+		// input, every action released. Not owned; must outlive its use.
+		void SetInputSource(InputSource* source) noexcept;
+		[[nodiscard]] InputSource* GetInputSource() const noexcept;
+		// The input of the current tick, as Lua's Input functions read it.
+		[[nodiscard]] InputState& GetInput() noexcept;
 
 		// ---- State ----
 

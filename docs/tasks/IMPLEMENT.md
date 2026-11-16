@@ -16,11 +16,9 @@ this way). So work in small green steps and push each one.
    `T11: add sandboxed ScriptEngine`; body explains what/why) and **push at once**:
    `git push origin claude/zen-johnson-treki2` (retry up to 4 times with backoff on network errors). Keep a short
    running log of what is done and what remains in `docs/tasks/<ID>-notes.md` and commit it with each checkpoint,
-   so a successor can continue. Never leave more than about an hour of work unpushed. Every commit message ends with:
-   ```
-   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-   Claude-Session: https://claude.ai/code/session_018Lf3htvbUciiJb4XMkzaDJ
-   ```
+   so a successor can continue. Never leave more than about an hour of work unpushed. End every commit message with
+   the attribution trailer your own session instructions give (a `Co-Authored-By:` line and
+   `Claude-Session: https://claude.ai/code/session_018Lf3htvbUciiJb4XMkzaDJ`).
 4. **Build quietly** with the scripts (4 CPUs, `-j4` at most, one build at a time). Disk is limited: keep the GCC
    Debug build dir; delete the Clang build dir after its check passes and Release/Dist dirs once used.
 5. **Quality**: production code per AGENTS.md; every deliverable real and tested; zero warnings; zero Vulkan

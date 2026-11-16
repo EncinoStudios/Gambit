@@ -20,8 +20,8 @@ Every dependency is a pinned git submodule (D-003). Rules:
 | ImGuizmo | `ImGuizmo` | `master` HEAD | `105e4fde45e4` | MIT | T20 |
 | EnTT | `entt` | tag `v3.16.0` | `b4e58bdd364a` | MIT | wired: `EnTT::EnTT` |
 | JoltPhysics | `JoltPhysics` | tag `v5.6.0` | `e77f175595e6` | MIT | T13 |
-| Lua | `lua` | tag `v5.4.8` | `6e22fedb74cf` | MIT | T11 |
-| sol2 | `sol2` | tag `v3.5.0` | `9190880c593d` | MIT | T11 |
+| Lua | `lua` | tag `v5.4.8` | `6e22fedb74cf` | MIT | wired: `lua::lua` (core + base, coroutine, math, string, table, utf8 compiled as C; configured by `Gambit/Scripting/LuaUser.h`, D-041) |
+| sol2 | `sol2` | tag `v3.5.0` | `9190880c593d` | MIT | wired: `sol2::sol2` (header-only; safety flags per configuration, see `ThirdParty/CMakeLists.txt`) |
 | miniaudio | `miniaudio` | tag `0.11.25` | `9634bedb5b5a` | public domain / MIT-0 | T16 |
 | stb | `stb` | `master` HEAD | `2c980bb59875` | public domain / MIT | wired: `stb::stb` (headers; the engine compiles `stb_image` + `stb_image_write` once, without stdio) |
 | cgltf | `cgltf` | tag `v1.15` | `360db1a95480` | MIT | wired: `cgltf::cgltf` (header; the engine compiles the implementation once and parses from memory) |

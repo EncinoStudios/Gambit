@@ -350,6 +350,25 @@ assets and is never exported. `GAMBIT_AUTHOR` names the author on the command li
 that the `TypeRegistry` owns and outlives, so a struct can hold a `std::vector` of itself (blend trees) without a reference
 cycle that would never be freed.
 
+**D-060 Lua runtime and sandbox (T11).** Lua 5.4 is compiled as C (`lua::lua`: the core and the base, coroutine,
+math, string, table and utf8 libraries; no io, os, debug, package or `linit.c`). `Gambit/Scripting/LuaUser.h`, included by
+`lua.h` through `LUA_USER_H` everywhere, fixes the string hash seed (`luai_makeseed`) and the `table.sort` pivot
+(`l_randomizePivot`) and routes the `^` operator through `DMath::Pow`. The sandbox removes `dofile`, `loadfile`,
+`collectgarbage` and `string.dump`; `load` takes text strings only; `print`/`warn` go to the client log with the location;
+`setmetatable` refuses `__gc` and `__mode` (finalizers and weak tables depend on the collector); the math library's
+transcendental functions are DMath and `math.random`/`math.randomseed` use the world's `Random` (a seed is required).
+After loading, the globals are frozen: `_G` keeps its identity (closures hold it as `_ENV`) but its entries move to a
+backing table behind `__index`/`__newindex`/`__pairs`, `rawset(_G, ...)` is refused and the metatable is protected;
+`pairs(_G)` hides sol2's `sol.*` globals. Bindings report bad input by throwing C++ exceptions, which sol2 catches at its
+trampolines and raises as Lua errors prefixed with the calling script line; no C++ exception crosses Lua's C frames.
+Every call from the engine into Lua is a `lua_pcall` with a message handler (location + traceback) and limits: a memory
+cap enforced by the allocator while script calls run (engine-side work on the state never fails for memory) and an
+instruction watchdog per outermost call (a count hook every 1000 instructions, every instruction once tripped so `pcall`
+cannot swallow it). sol2 runs with `SOL_ALL_SAFETIES_ON` in Debug and Release; Dist keeps the checks that stop a bad script
+from crashing the player (`SOL_SAFE_USERTYPE`, `_REFERENCES`, `_FUNCTION_CALLS`, `_FUNCTION_OBJECTS`, `_GETTER`, `_PROXIES`)
+and drops the debugging ones (stack and number-precision checks). The engine Lua library (`Gambit/Lua/*.lua`) is embedded at
+build time like the shaders; each module is `require("Gambit.<Name>")` and also the global `<Name>`.
+
 ## Process
 
 **D-090 Checkpointed delivery.** The dev container is ephemeral and unpushed work has been lost, so: tasks run one

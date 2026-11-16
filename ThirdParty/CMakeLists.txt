@@ -2,7 +2,7 @@
 # patches and configuration live here. Every target below builds with warnings disabled.
 #
 # Wired now: glm, doctest, nlohmann_json, EnTT, glfw, xxhash, lz4, monocypher, stb, cgltf, mikktspace, Vulkan-Headers,
-# NVRHI, glslang.
+# NVRHI, glslang, Lua, sol2.
 # The remaining submodules (see ThirdParty/README.md) are wired by the task that first needs them.
 
 set(GB_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -162,3 +162,45 @@ foreach(GB_GLSLANG_TARGET glslang glslang-standalone glslang-default-resource-li
 endforeach()
 # A build tool, not a product: keep it out of bin/ (which holds what ships).
 set_target_properties(glslang-standalone PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+
+# Lua 5.4 (D-041): the core and the standard libraries the script sandbox opens (base, coroutine, math, string, table,
+# utf8), compiled as C. The io, os, debug and package libraries, linit.c (luaL_openlibs) and the stand-alone programs
+# are left out: scripts never get them. Gambit's configuration of the VM (a fixed string hash seed and table.sort pivot,
+# DMath behind the `^` operator) is the header Gambit/Scripting/LuaUser.h, which lua.h includes through LUA_USER_H in
+# every translation unit that uses Lua, so the library and the engine agree on it.
+gambit_require_submodule(lua lua.h)
+set(GB_LUA_SOURCES
+    lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmathlib.c
+    lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c lstrlib.c ltable.c ltablib.c ltm.c lundump.c lutf8lib.c
+    lvm.c lzio.c)
+list(TRANSFORM GB_LUA_SOURCES PREPEND "${GB_THIRDPARTY_DIR}/lua/")
+add_library(gb_lua STATIC ${GB_LUA_SOURCES})
+set_target_properties(gb_lua PROPERTIES LINKER_LANGUAGE C)
+target_include_directories(gb_lua SYSTEM PUBLIC "${GB_THIRDPARTY_DIR}/lua")
+# LuaUser.h lives with the engine; consumers of Lua find it through the engine's own include directory.
+target_include_directories(gb_lua PRIVATE "${PROJECT_SOURCE_DIR}/Gambit/src")
+target_compile_definitions(gb_lua PUBLIC
+    "LUA_USER_H=\"Gambit/Scripting/LuaUser.h\""
+    $<$<PLATFORM_ID:Linux>:LUA_USE_LINUX>
+    $<$<PLATFORM_ID:Darwin>:LUA_USE_MACOSX>)
+gambit_silence_warnings(gb_lua)
+add_library(lua::lua ALIAS gb_lua)
+
+# sol2 v3.5 (header-only) on top of gb_lua, which is C: Lua errors are longjmps, so sol2 catches C++ exceptions at its
+# trampolines and turns them into Lua errors (D-041). Debug and Release check everything (SOL_ALL_SAFETIES_ON). Dist
+# keeps the checks that stop a bad script from crashing the player (argument and userdata types, references, proxies)
+# and drops the expensive debugging ones (stack and number precision checks). sol2 never prints: the engine reports
+# script errors itself.
+gambit_header_only_library(gb_sol2 sol2::sol2 sol2 include include/sol/sol.hpp)
+target_link_libraries(gb_sol2 INTERFACE gb_lua)
+target_compile_definitions(gb_sol2 INTERFACE
+    SOL_LUA_VERSION=504
+    SOL_USING_CXX_LUA=0
+    SOL_PRINT_ERRORS=0
+    $<$<NOT:$<CONFIG:Dist>>:SOL_ALL_SAFETIES_ON=1>
+    $<$<CONFIG:Dist>:SOL_SAFE_USERTYPE=1>
+    $<$<CONFIG:Dist>:SOL_SAFE_REFERENCES=1>
+    $<$<CONFIG:Dist>:SOL_SAFE_FUNCTION_CALLS=1>
+    $<$<CONFIG:Dist>:SOL_SAFE_FUNCTION_OBJECTS=1>
+    $<$<CONFIG:Dist>:SOL_SAFE_GETTER=1>
+    $<$<CONFIG:Dist>:SOL_SAFE_PROXIES=1>)

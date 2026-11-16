@@ -33,8 +33,10 @@ target_compile_definitions(Gambit PUBLIC
 find_package(Threads REQUIRED)
 # EnTT is part of the public API: World exposes its registry and components are EnTT storages (D-021). So is
 # nlohmann_json: the serialization and command APIs pass JSON documents (Serialization/Json.h). So is NVRHI: the
-# renderer and editor talk to the GPU through NVRHI handles (D-030); Vulkan itself stays private to RHI/Vulkan.
-target_link_libraries(Gambit PUBLIC Threads::Threads glm::glm EnTT::EnTT nlohmann_json::nlohmann_json nvrhi)
+# renderer and editor talk to the GPU through NVRHI handles (D-030); Vulkan itself stays private to RHI/Vulkan. So is
+# sol2 (with Lua): modules add their Lua API through Scripting/LuaBindings.h (D-041), and every translation unit that
+# sees sol2 must agree on its configuration.
+target_link_libraries(Gambit PUBLIC Threads::Threads glm::glm EnTT::EnTT nlohmann_json::nlohmann_json nvrhi sol2::sol2)
 target_link_libraries(Gambit PRIVATE
     xxhash::xxhash glfw::glfw stb::stb cgltf::cgltf mikktspace::mikktspace nvrhi_vk Vulkan::Headers)
 
@@ -46,6 +48,9 @@ file(GLOB_RECURSE GB_ENGINE_SHADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.geom.glsl")
 list(FILTER GB_ENGINE_SHADERS EXCLUDE REGEX "/Shaders/Include/")
 gb_add_shaders(Gambit ${GB_ENGINE_SHADERS})
+
+# The engine's Lua library (D-041), embedded like the shaders.
+gb_embed_lua_library(Gambit "${CMAKE_CURRENT_SOURCE_DIR}/Lua")
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${GB_ENGINE_SOURCES})
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/Shaders" PREFIX "Shaders" FILES ${GB_ENGINE_SHADERS})
